@@ -19,7 +19,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.7.8"
+APP_VERSION = "1.8.1"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
