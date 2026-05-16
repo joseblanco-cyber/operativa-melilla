@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -24,7 +23,7 @@ APP_VERSION = "1.7.8"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
-# Estilos CSS inyectados
+# Estilos CSS inyectados para la plataforma interna
 st.markdown(
     """
     <style>
@@ -140,11 +139,11 @@ def etiqueta_categoria(cat):
     if cat == "SECO": return "SECO"
     return cat
 
-def descripcion_termica(categorias_ordenadas, marcas_detectadas):
-    cats = list(categorias_ordenadas)[:]
+def descripcion_termica(categories_ordered, marks_detected):
+    cats = list(categories_ordered)[:]
     if not cats:
-        if "COLOR_ROJO_FRIO" in marcas_detectadas: return "TODO REFRIGERADO 3º"
-        if "COLOR_AZUL_SECO" in marcas_detectadas: return "TODO SECO"
+        if "COLOR_ROJO_FRIO" in marks_detected: return "TODO REFRIGERADO 3º"
+        if "COLOR_AZUL_SECO" in marks_detected: return "TODO SECO"
         return "REVISAR"
     unicas = list(dict.fromkeys(cats))
     if len(unicas) == 1:
@@ -550,7 +549,6 @@ def construir_historico_servicios(fecha_objetivo, df_servicios, config_servicios
         })
     return pd.DataFrame(filas)
 
-# Arreglado: Añadidos fecha_obj y margen_minutos como argumentos formales
 def generar_operativas_individuales(texto_completo, config_servicios, fecha_objetivo, margen_minutos):
     if st.session_state.df_servicios is None or st.session_state.df_servicios.empty:
         return {}
@@ -647,11 +645,195 @@ if not st.session_state.get("autenticado", False):
         st.error("No hay usuario master configurado en Secrets.")
         st.stop()
     
-    st.markdown('<div class="op-version-top">Versión '+APP_VERSION+' · JCB</div><div class="op-login-main"><div class="op-chip">🔒 Acceso authorized · Transportes Nieves S.A.</div>', unsafe_allow_html=True)
+    # 🎨 INYECCIÓN DE CSS EXCLUSIVO - DISEÑO AVANZADO OSCURO (Fiel a tu versión anterior)
+    st.markdown(
+        """
+        <style>
+            [data-testid="stAppViewContainer"] {
+                background:
+                    radial-gradient(circle at 18% 10%, rgba(180, 27, 55, 0.22), transparent 30%),
+                    radial-gradient(circle at 82% 76%, rgba(14, 116, 85, 0.22), transparent 34%),
+                    linear-gradient(135deg, #020617 0%, #071225 48%, #021510 100%) !important;
+            }
+            [data-testid="stHeader"] { background: rgba(0,0,0,0) !important; }
+            .block-container {
+                padding-top: 0.75rem !important;
+                padding-bottom: 0 !important;
+                max-width: 640px !important;
+            }
+            .op-version-top {
+                position: fixed;
+                top: 66px;
+                right: 24px;
+                z-index: 9999;
+                color: rgba(226,232,240,.72);
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: .01em;
+                font-family: monospace;
+            }
+            .op-login-main {
+                width: 100%;
+                max-width: 560px;
+                margin: 0 auto;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+            }
+            .op-chip {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: fit-content;
+                color: #fee2e2;
+                background: rgba(127,29,29,.24);
+                border: 1px solid rgba(248,113,113,.48);
+                border-radius: 999px;
+                padding: 8px 17px;
+                font-size: 13px;
+                font-weight: 800;
+                margin: 0 auto 22px auto !important;
+                box-shadow: 0 8px 24px rgba(127,29,29,.14);
+            }
+            .op-logo-wrap {
+                width: 100%;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                margin: 0 auto 14px auto;
+                animation: logoBreath 5.4s ease-in-out infinite;
+            }
+            .op-logo-wrap img {
+                width: min(545px, 88vw);
+                max-height: 158px;
+                object-fit: contain;
+                filter: drop-shadow(0 0 12px rgba(255,255,255,.04)) drop-shadow(0 0 20px rgba(34,197,94,.05));
+            }
+            .op-claim {
+                color: #f3f4f6;
+                font-size: 16.5px;
+                font-weight: 560;
+                text-align: center;
+                margin: 0 auto 44px auto;
+                text-shadow: 0 1px 3px rgba(0,0,0,.55);
+            }
+            .op-title {
+                color: #f8fafc;
+                font-size: 29px;
+                font-weight: 900;
+                line-height: 1.1;
+                letter-spacing: -.035em;
+                text-align: center;
+                margin: 0 auto 13px auto;
+            }
+            .op-subtitle {
+                color: #e5e7eb;
+                font-size: 14.5px;
+                line-height: 1.45;
+                text-align: center;
+                margin: 0 auto 22px auto;
+            }
+            .op-divider {
+                width: min(480px, 82vw);
+                height: 1px;
+                margin: 0 auto 22px auto;
+                background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.18) 50%, transparent 100%);
+            }
+            .op-form-shell {
+                width: 282px;
+                margin: 0 auto;
+                padding: 16px 16px 17px 16px;
+                background: rgba(15,23,42,.26);
+                border: 1px solid rgba(255,255,255,.055);
+                border-radius: 18px;
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                box-shadow: 0 18px 45px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.035);
+            }
+            div[data-testid="stForm"] {
+                width: 250px !important;
+                max-width: 250px !important;
+                margin: 0 auto !important;
+                border: 0 !important;
+                background: transparent !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+            }
+            div[data-testid="stForm"] > div { gap: .18rem !important; }
+            div[data-testid="stTextInput"] {
+                width: 250px !important;
+                max-width: 250px !important;
+                margin: 0 auto !important;
+            }
+            div[data-testid="stTextInput"] label {
+                color: #f8fafc !important;
+                font-weight: 750 !important;
+                font-size: 13px !important;
+                padding-bottom: .08rem !important;
+            }
+            div[data-testid="stTextInput"] input {
+                background: rgba(15,23,42,.58) !important;
+                color: #f8fafc !important;
+                border-radius: 9px !important;
+                border: 1px solid rgba(203,213,225,.45) !important;
+                min-height: 40px !important;
+                height: 40px !important;
+                font-size: 14px !important;
+                padding: 7px 10px !important;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,.04) !important;
+            }
+            div[data-testid="stTextInput"] button {
+                background: rgba(15,23,42,.58) !important;
+                color: #e5e7eb !important;
+                border-radius: 0 9px 9px 0 !important;
+            }
+            div[data-testid="stFormSubmitButton"] {
+                width: 250px !important;
+                max-width: 250px !important;
+                margin: 10px auto 0 auto !important;
+            }
+            div[data-testid="stFormSubmitButton"] button {
+                background: linear-gradient(90deg, #15803d 0%, #16a34a 58%, #22c55e 100%) !important;
+                color: white !important;
+                border-radius: 10px !important;
+                border: none !important;
+                font-size: 15px !important;
+                font-weight: 850 !important;
+                width: 100% !important;
+                min-height: 41px !important;
+                height: 41px !important;
+                box-shadow: 0 10px 24px rgba(22,163,74,.30) !important;
+            }
+            @keyframes logoBreath {
+                0%,100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 10px rgba(255,255,255,.04)); }
+                50% { transform: translateY(-2px) scale(1.005); filter: drop-shadow(0 0 14px rgba(255,255,255,.07)) drop-shadow(0 0 24px rgba(34,197,94,.08)); }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    st.markdown(f'<div class="op-version-top">Versión {APP_VERSION} · JCB</div>', unsafe_allow_html=True)
+    st.markdown('<div class="op-login-main">', unsafe_allow_html=True)
+    st.markdown('<div class="op-chip">🔒 Acceso autorizado · Transportes Nieves S.A.</div>', unsafe_allow_html=True)
+    
     logo_path = LOGO_OP_MERCADONA_PATH if LOGO_OP_MERCADONA_PATH.exists() else LOGO_NIEVES_PATH
     if logo_path.exists():
-        st.markdown(f'<div class="op-logo-wrap"><img src="data:image/png;base64,{base64.b64encode(logo_path.read_bytes()).decode("utf-8")}"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="op-claim">Alianza Estratégica para la Logística de Distribución.</div><div class="op-title">Operativa Mercadona Melilla</div><div class="op-form-shell">', unsafe_allow_html=True)
+        st.markdown(f'<div class="op-logo-wrap"><img src="data:image/png;base64,{base64.b64encode(logo_path.read_bytes()).decode("utf-8")}" alt="OP Mercadona"></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="font-size:48px;font-weight:900;color:#ef4444;">OP_Mercadona</div>', unsafe_allow_html=True)
+        
+    st.markdown(
+        """
+        <div class="op-claim">Alianza Estratégica para la Logística de Distribución.</div>
+        <div class="op-title">Operativa Mercadona Melilla</div>
+        <div class="op-subtitle">Plataforma privada para planificación servicios Mercadona.</div>
+        <div class="op-divider"></div>
+        <div class="op-form-shell">
+        """,
+        unsafe_allow_html=True,
+    )
     
     with st.form("form_login"):
         user = st.text_input("Usuario", max_chars=15)
@@ -685,6 +867,20 @@ if st.session_state.get("forzar_cambio_password", False):
             st.rerun()
     st.stop()
 
+# Limpiador visual de restos del Login una vez autenticado
+st.markdown(
+    """
+    <style>
+        .op-login-main, .op-chip, .op-logo-wrap, .op-claim, .op-title, .op-subtitle, .op-divider, .op-form-shell, .op-version-top {
+            display: none !important; visibility: hidden !important; height: 0 !important; margin: 0 !important; padding: 0 !important;
+        }
+        [data-testid="stAppViewContainer"] { background: #ffffff !important; }
+        [data-testid="stHeader"] { background: rgba(255,255,255,0.94) !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # Menú superior de cerrar sesión
 col_u, col_o = st.columns([5, 1])
 col_u.caption(f"Usuario: {st.session_state.usuario_nombre} · Rol: {st.session_state.usuario_rol} · Versión {APP_VERSION}")
@@ -696,10 +892,12 @@ if col_o.button("Salir", key="logout"):
 
 st.markdown('<div class="main-banner"><h1>🚚 Operativa Mercadona Melilla</h1><p>Generador operativo para planificación de semirremolques, chóferes y llegadas.</p></div>', unsafe_allow_html=True)
 
+# Inicializar estados de persistencia temporal en st.session_state
 if "df_servicios" not in st.session_state: st.session_state.df_servicios = None
 if "df_llegadas" not in st.session_state: st.session_state.df_llegadas = None
 if "archivos_procesados" not in st.session_state: st.session_state.archivos_procesados = set()
 
+# Estructura de Pestañas
 tabs = ["🚚 Generador", "📊 Dashboard", "⚙️ Configuración"] if st.session_state.usuario_rol == "master" else ["🚚 Generador"]
 tabs_rendered = st.tabs(tabs)
 
@@ -769,7 +967,7 @@ with tabs_rendered[0]:
                 st.dataframe(st.session_state.df_servicios, use_container_width=True, hide_index=True)
                 st.subheader("5. Asignación de chóferes y ajustes")
                 
-                # Arreglado: Se inicializa el diccionario FUERA del bucle para evitar vaciarlo en cada iteración
+                # Inicialización FUERA del bucle para evitar vaciar configuraciones
                 config_servicios = {}
                 for idx, fila in st.session_state.df_servicios.iterrows():
                     key = f"{fila['Semi']}_{fila['Hora']}_{idx}"
@@ -831,7 +1029,6 @@ with tabs_rendered[0]:
                         st.text_area("Texto listo para WhatsApp", texto_w, height=450)
                         
                         st.subheader("Operativas individuales por chófer")
-                        # Arreglado: Pasados argumentos faltantes a las operativas individuales
                         inds = generar_operativas_individuales(texto_w, config_servicios, fecha_obj, margen_minutos)
                         if not inds: 
                             st.info("No hay operativas individuales. Asegúrate de haber asignado chóferes a los servicios incluidos.")
@@ -851,7 +1048,7 @@ with tabs_rendered[0]:
                             st.error(f"⚠️ Alerta: El texto de WhatsApp se generó correctamente, pero no se pudo registrar en el histórico de Google Sheets debido a un fallo de credenciales. Detalles: {e}")
 
 # =========================================================
-# SECCIÓN INFERIOR: SEPARACIÓN DE PESTAÑAS MASTER
+# SECCIÓN INFERIOR: SEPARACIÓN DE PESTAÑAS MASTER (DASHBOARD Y CONFIG)
 # =========================================================
 if st.session_state.usuario_rol == "master":
     # 2. PESTAÑA: DASHBOARD LOGÍSTICO
