@@ -1,4 +1,5 @@
 # utils/auth.py
+import re
 import secrets
 import hashlib
 from datetime import datetime
