@@ -263,7 +263,7 @@ def filtrar_servicios_por_modo(df_servicios, modo):
     if modo == "Operativa adelanto (1 Excel)":
         df = df[df["OrdenHora"] <= hora_a_minutos("20:30")]
     elif modo == "Completar operativa de adelanto (2 Excel)":
-        df = df[df["OrdenHora"] > hora_a_minutos("20:30")]
+        df = df[df["OrdenHora"] >= hora_a_minutos("20:30")]
     return df.sort_values(["OrdenHora", "Semi"]).drop(columns=["OrdenHora"])
 
 # =========================================================
