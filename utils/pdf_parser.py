@@ -170,6 +170,9 @@ def tipo_bloque_pdf(texto_bloque):
     t_original = str(texto_bloque).strip().upper()
     t = t_original.replace(" ", "")
 
+    # Caso real PDF:
+    # R2140BDK -> REFRIGERADO / AGUA / AGUA / REPESCA.
+    # Debe ganar antes que MIXTO_REPESCA genérico para no heredar leyendas generales.
     if "REFRIGERADO" in t and "AGUA" in t and "REPESCA" in t:
         return "MIXTO_REFRIGERADO_AGUA_REPESCA"
 
@@ -179,7 +182,10 @@ def tipo_bloque_pdf(texto_bloque):
     if "PLANIFICARTODOELSP" in t or re.search(r"\bSP\b", t_original):
         return "TODO_SECO"
 
-    if "PICKING" in t or "PIKING" in t or "DROGUERIA" in t or "DROG" in t or "COSMETICA" in t or "COSME" in t or "ALCOHOL" in t:
+    if (
+        "PICKING" in t or "PIKING" in t or "DROGUERIA" in t or "DROG" in t
+        or "COSMETICA" in t or "COSME" in t or "ALCOHOL" in t
+    ):
         return "TODO_SECO"
 
     if "CARNE" in t or "FRUTA" in t or "PESCADO" in t:
@@ -390,6 +396,13 @@ def extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operati
     return registros, None
 
 def extraer_registros_pdf(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera_fn, categoria_segmento_fn, descripcion_termica_fn):
+    """
+    Lector híbrido PDF:
+    - Usa el parser posicional como fuente principal.
+    - Usa el parser lineal como respaldo para servicios especiales que el posicional puede saltarse
+      por disposición visual distinta, por ejemplo "DESCARGAMOS 6:15".
+    - Fusiona sin duplicar matrículas.
+    """
     aviso = None
     aviso_lineal = None
     registros_posicional = []
