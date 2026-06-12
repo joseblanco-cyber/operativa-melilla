@@ -19,7 +19,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -208,12 +208,135 @@ def termica_operativa_manual(valor_manual, valor_detectado=""):
 # =========================================================
 # INTERMEDIARIOS DE EXTRACCIÓN (PUENTE CON /UTILS)
 # =========================================================
+
+
+def _pdf_texto_completo_para_correccion(bytes_archivo):
+    """
+    Lee texto bruto del PDF solo para afinar la térmica real de cada semi.
+    No sustituye al parser principal; solo evita que leyendas generales del PDF
+    como "REPESCA / SECO CONGELADO REFRIGERADO" contaminen la mercancía real.
+    """
+    try:
+        import fitz
+        doc = fitz.open(stream=bytes_archivo, filetype="pdf")
+        return "\n".join(page.get_text("text") for page in doc)
+    except Exception:
+        return ""
+
+
+def _bloque_pdf_por_semi(texto_pdf, semi):
+    texto = str(texto_pdf or "")
+    semi = str(semi or "").strip().upper()
+    if not texto or not semi:
+        return ""
+
+    pos = texto.upper().find(semi)
+    if pos < 0:
+        return ""
+
+    inicio = texto.upper().rfind("*0001", 0, pos)
+    if inicio < 0:
+        inicio = max(0, pos - 700)
+
+    fin = texto.upper().find("*0001", pos + len(semi))
+    if fin < 0:
+        fin = min(len(texto), pos + 1400)
+
+    return texto[inicio:fin]
+
+
+def _mercancia_real_pdf_desde_bloque(bloque):
+    """
+    Extrae la línea real de mercancías situada tras la temperatura decimal del bloque.
+    Ejemplo R2140BDK:
+    25,0 / REFRIGERADO / AGUA / AGUA / 10% / P. MOTRIL
+    """
+    b = str(bloque or "")
+    if not b:
+        return ""
+
+    # Cortar entre temperatura decimal y puerto/CR. Es la zona más fiable de mercancía real.
+    m = re.search(r"\n\s*\d{1,2},\d\s*\n(?P<body>.*?)(?:\n\s*P\.\s*(?:MOTRIL|MALAGA|ALMERIA|ALMERÍA)|\n\s*CR[´']?s|\n\s*SECOS\s+\d+)", b, flags=re.I | re.S)
+    if not m:
+        return ""
+
+    body = m.group("body")
+    lineas = []
+    for linea in body.splitlines():
+        t = linea.strip().upper()
+        if not t:
+            continue
+        # Evitar datos de viaje/fechas/lugares si aparecieran por el orden del PDF.
+        if re.search(r"\d{2}/\d{2}/\d{4}|SALIDA|VIERNES|S[ÁA]BADO|JUEVES|P\.\s*", t):
+            continue
+        lineas.append(t)
+
+    return " ".join(lineas).strip()
+
+
+def _corregir_termica_registro_pdf(reg, texto_pdf):
+    """
+    Regla de seguridad para PDFs Mercadona:
+    la descripción térmica debe salir de la línea real de mercancías del semi,
+    no de leyendas generales del bloque ni de notas amarillas.
+    """
+    try:
+        semi = str(reg.get("Semi", "")).strip().upper()
+        bloque = _bloque_pdf_por_semi(texto_pdf, semi)
+        mercancia_real = _mercancia_real_pdf_desde_bloque(bloque)
+        m = mercancia_real.upper()
+
+        if not m:
+            return reg
+
+        # Caso detectado 13/06/2026: R2140BDK = REFRIGERADO / AGUA / AGUA / REPESCA(10%).
+        # No debe heredar SECO ni CONGELADO de la leyenda "REPESCA / SECO CONGELADO REFRIGERADO".
+        tiene_agua = "AGUA" in m
+        tiene_refrigerado = "REFRIGERADO" in m or "REFRIG" in m
+        tiene_repesca = "REPESCA" in m or "10%" in m
+        tiene_congelado_real = "CONGELADO" in m or "-25" in m
+        tiene_seco_real = re.search(r"(^|\s)SECO(S)?($|\s)", m) is not None or " SP " in f" {m} "
+
+        if tiene_agua and (tiene_refrigerado or tiene_repesca) and not tiene_congelado_real and not tiene_seco_real:
+            reg["Descripción térmica"] = "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"
+            reg["Mercancías detectadas"] = "REFRIGERADO, AGUA, AGUA, REPESCA"
+            reg["Orden térmico detectado"] = "REFRIGERADO / AGUA / AGUA / REPESCA"
+            return reg
+
+        # Si en la línea real hay AGUA y refrigerado, pero no congelado, nunca añadir CONGELADO por notas externas.
+        if tiene_agua and tiene_refrigerado and not tiene_congelado_real:
+            reg["Descripción térmica"] = "MIXTO_REFRIGERADO/AGUA"
+            reg["Mercancías detectadas"] = mercancia_real
+            reg["Orden térmico detectado"] = mercancia_real.replace(" ", " / ")
+            return reg
+
+    except Exception:
+        pass
+
+    return reg
+
+
+def corregir_termicas_pdf_por_mercancia_real(bytes_archivo, registros):
+    texto_pdf = _pdf_texto_completo_para_correccion(bytes_archivo)
+    if not texto_pdf or not registros:
+        return registros
+    corregidos = []
+    for reg in registros:
+        if isinstance(reg, dict):
+            corregidos.append(_corregir_termica_registro_pdf(reg.copy(), texto_pdf))
+        else:
+            corregidos.append(reg)
+    return corregidos
+
 def extraer_registros_archivo(bytes_archivo, nombre_archivo, es_excel_operativo):
     extension = Path(str(nombre_archivo)).suffix.lower()
     if extension in [".xlsx", ".xlsm", ".xls"]:
         return excel_mod.extraer_registros_excel(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera, categoria_segmento, descripcion_termica)
     if extension == ".pdf":
-        return pdf_mod.extraer_registros_pdf(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera, categoria_segmento, descripcion_termica)
+        registros, err = pdf_mod.extraer_registros_pdf(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera, categoria_segmento, descripcion_termica)
+        if not err:
+            registros = corregir_termicas_pdf_por_mercancia_real(bytes_archivo, registros)
+        return registros, err
     return [], f"Formato no soportado: {nombre_archivo}"
 
 def construir_servicios(registros, fecha_objetivo):
