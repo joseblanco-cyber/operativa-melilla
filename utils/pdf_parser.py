@@ -86,7 +86,7 @@ def texto_de_palabras(palabras):
     return " ".join(p["text"] for p in ordenadas)
 
 def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
-    horas_servicio_validas = ["05:30", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"]
+    horas_servicio_validas = ["05:30", "06:15", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"]
     page = semi_word["page"]
     semi_y = semi_word["y0"]
 
@@ -150,7 +150,7 @@ def limpiar_horas_administrativas_pdf(texto_bloque, horas):
     return horas_limpias
 
 def horas_fechas_pdf_por_bloque(texto_bloque, fecha_fallback=None):
-    horas_servicio_validas = ["05:30", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"]
+    horas_servicio_validas = ["05:30", "06:15", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"]
     horas = []
     for h in extraer_horas(texto_bloque):
         if h in horas_servicio_validas and h not in horas:
@@ -167,35 +167,46 @@ def horas_fechas_pdf_por_bloque(texto_bloque, fecha_fallback=None):
     return [{"hora": h, "fecha": fecha_servicio, "col": None} for h in horas]
 
 def tipo_bloque_pdf(texto_bloque):
-    t = str(texto_bloque).strip().upper().replace(" ", "")
+    t_original = str(texto_bloque).strip().upper()
+    t = t_original.replace(" ", "")
+
+    if "REFRIGERADO" in t and "AGUA" in t and "REPESCA" in t:
+        return "MIXTO_REFRIGERADO_AGUA_REPESCA"
+
     if "REPESCA" in t or "CONGELADO" in t or "REFRIGERADO" in t:
         return "MIXTO_REPESCA"
-    if "REFRIGERADO" in t or "AGUA" in t or "AGUA" in t or "REPESCA" in t:
-        return "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"    
-    if "PLANIFICARTODOELSP" in t or re.search(r"\bSP\b", texto_bloque.upper()):
+
+    if "PLANIFICARTODOELSP" in t or re.search(r"\bSP\b", t_original):
         return "TODO_SECO"
-    if "PICKING" in t or "DROGUERIA" in t or "COSMETICA" in t or "ALCOHOL" in t:
+
+    if "PICKING" in t or "PIKING" in t or "DROGUERIA" in t or "DROG" in t or "COSMETICA" in t or "COSME" in t or "ALCOHOL" in t:
         return "TODO_SECO"
+
     if "CARNE" in t or "FRUTA" in t or "PESCADO" in t:
         return "TODO_REFRIGERADO"
+
     return ""
 
 def termica_pdf_por_bloque(texto_bloque, categoria_segmento_fn):
     tipo = tipo_bloque_pdf(texto_bloque)
     t = str(texto_bloque).strip().upper().replace(" ", "")
 
+    if tipo == "MIXTO_REFRIGERADO_AGUA_REPESCA":
+        return ["REFRIGERADO", "AGUA", "AGUA", "REPESCA"], {"REFRIGERADO", "AGUA", "REPESCA", "PDF_POSICIONAL"}
+
     if tipo == "TODO_REFRIGERADO":
         return ["REFRIGERADO_3"], {"REFRIGERADO_3", "PDF_POSICIONAL"}
+
     if tipo == "TODO_SECO":
         return ["SECO"], {"SECO", "PDF_POSICIONAL"}
 
-    if tipo == "MIXTO_REPESCA":
+    if tipo in ["MIXTO_REPESCA", "MIXTO_REFRIGERADO_AGUA_REPESCA"]:
         cats = []
         marcas = {"PDF_POSICIONAL"}
         if "REFRIGERADO" in t or "FRIO" in t or "FRÍO" in t:
             cats.append("REFRIGERADO_3")
             marcas.add("REFRIGERADO_3")
-        if "SECO" in t or "SECOS" in t or "REPESCA" in t:
+        if "SECO" in t or "SECOS" in t:
             cats.append("SECO")
             marcas.add("SECO")
         if "CONGELADO" in t or "-25" in t:
@@ -245,7 +256,7 @@ def ajustar_servicios_pdf_por_tipo(registro, texto_bloque):
             horas_filtradas.append(hf)
 
         if horas_filtradas:
-            prioridad = ["05:30", "20:30", "21:30", "22:00", "22:30", "15:00", "07:00"]
+            prioridad = ["05:30", "06:15", "20:30", "21:30", "22:00", "22:30", "15:00", "07:00"]
             for h in prioridad:
                 seleccion = [hf for hf in horas_filtradas if hf["hora"] == h]
                 if seleccion:
@@ -282,6 +293,8 @@ def extraer_registros_pdf_posicional(bytes_archivo, nombre_archivo, es_excel_ope
 
         categorias, marcas = termica_pdf_por_bloque(texto_bloque, categoria_segmento_fn)
         descripcion = descripcion_termica_fn(categorias, sorted(marcas)) if categorias else "REVISAR"
+        if tipo_bloque_pdf(texto_bloque) == "MIXTO_REFRIGERADO_AGUA_REPESCA":
+            descripcion = "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"
         puerto = detectar_puerto_en_texto(texto_bloque)
         naviera = obtener_naviera_fn(puerto)
 
@@ -317,7 +330,7 @@ def extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operati
         return [], f"No se detectaron matrículas en el PDF {nombre_archivo}"
 
     registros = []
-    horas_servicio_validas = {"05:30", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"}
+    horas_servicio_validas = {"05:30", "06:15", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"}
     semis_procesados = set()
 
     for i, match in enumerate(posiciones):
@@ -356,6 +369,8 @@ def extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operati
 
         categorias_ordenadas, marcas_detectadas = termica_pdf_por_bloque(bloque, categoria_segmento_fn)
         descripcion = descripcion_termica_fn(categorias_ordenadas, sorted(marcas_detectadas)) if categorias_ordenadas else "REVISAR"
+        if tipo_bloque_pdf(bloque) == "MIXTO_REFRIGERADO_AGUA_REPESCA":
+            descripcion = "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"
 
         registros.append({
             "Archivo": nombre_archivo,
@@ -375,14 +390,48 @@ def extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operati
     return registros, None
 
 def extraer_registros_pdf(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera_fn, categoria_segmento_fn, descripcion_termica_fn):
+    aviso = None
+    aviso_lineal = None
+    registros_posicional = []
+    registros_lineal = []
+
     try:
-        registros, aviso = extraer_registros_pdf_posicional(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera_fn, categoria_segmento_fn, descripcion_termica_fn)
-        if registros and len(registros) >= 3:
-            return registros, None
+        registros_posicional, aviso = extraer_registros_pdf_posicional(
+            bytes_archivo,
+            nombre_archivo,
+            es_excel_operativo,
+            obtener_naviera_fn,
+            categoria_segmento_fn,
+            descripcion_termica_fn
+        )
     except Exception as e:
         aviso = f"PDF posicional no disponible: {e}"
 
-    registros, aviso_lineal = extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera_fn, categoria_segmento_fn, descripcion_termica_fn)
-    if registros:
-        return registros, aviso or aviso_lineal
+    try:
+        registros_lineal, aviso_lineal = extraer_registros_pdf_lineal(
+            bytes_archivo,
+            nombre_archivo,
+            es_excel_operativo,
+            obtener_naviera_fn,
+            categoria_segmento_fn,
+            descripcion_termica_fn
+        )
+    except Exception as e:
+        aviso_lineal = f"PDF lineal no disponible: {e}"
+
+    if registros_posicional:
+        registros = list(registros_posicional)
+        semis_existentes = {str(r.get("Semi", "")).strip().upper() for r in registros}
+
+        for r in registros_lineal:
+            semi = str(r.get("Semi", "")).strip().upper()
+            if semi and semi not in semis_existentes:
+                registros.append(r)
+                semis_existentes.add(semi)
+
+        return registros, None
+
+    if registros_lineal:
+        return registros_lineal, aviso or aviso_lineal
+
     return [], aviso_lineal or aviso or f"No se pudieron construir servicios desde el PDF {nombre_archivo}"
