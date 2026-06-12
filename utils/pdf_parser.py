@@ -171,8 +171,7 @@ def tipo_bloque_pdf(texto_bloque):
     if "REPESCA" in t or "CONGELADO" in t or "REFRIGERADO" in t:
         return "MIXTO_REPESCA"
     if "REFRIGERADO" in t or "AGUA" in t or "AGUA" in t or "REPESCA" in t:
-        return "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"
-    
+        return "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"    
     if "PLANIFICARTODOELSP" in t or re.search(r"\bSP\b", texto_bloque.upper()):
         return "TODO_SECO"
     if "PICKING" in t or "DROGUERIA" in t or "COSMETICA" in t or "ALCOHOL" in t:
