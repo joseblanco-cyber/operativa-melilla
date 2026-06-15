@@ -19,7 +19,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -594,16 +594,282 @@ def resumen_operativo(df_servicios, config_servicios):
     res["Semis únicos"], res["Chóferes"] = len(semi_set), len(chofer_set)
     return res
 
-def generar_plan_interno(df_servicios, config_servicios):
-    if df_servicios is None or df_servicios.empty: return ""
+def _escape_html(valor):
+    import html
+    return html.escape(str(valor if valor is not None else ""))
+
+
+def generar_plan_interno_datos(df_servicios, config_servicios):
+    if df_servicios is None or df_servicios.empty:
+        return {}, {"servicios": 0, "semis": 0, "choferes": 0, "frio": 0, "envases": 0}
+
     plan = {}
+    semis = set()
+    choferes = set()
+    servicios = 0
+    frio = 0
+    envases_total = 0
+
     for idx, fila in df_servicios.iterrows():
         cfg = config_servicios.get(f"{fila['Semi']}_{fila['Hora']}_{idx}", {})
-        if not cfg.get("incluir", True): continue
-        ch = str(cfg.get("chofer", "SIN ASIGNAR")).strip().upper()
-        plan.setdefault(ch, []).append(f"- {limpiar_hora(fila['Hora'])}h → {fila['Semi']} ({cfg.get('completa', fila['Descarga completa'])} descarga / {cfg.get('envases', fila['Retira envases'])} envases)")
-        if str(cfg.get("gestion_envases_0530", "")).startswith("Envases pendientes"): plan[ch].append(f"- Tras servicio posterior → {fila['Semi']} (recogida envases pendiente)")
-    return "🔧 PLAN INTERNO NIEVES\n\n" + "\n".join(f"{ch}:\n" + "\n".join(l) + "\n" for ch, l in plan.items())
+        if not cfg.get("incluir", True):
+            continue
+
+        ch = str(cfg.get("chofer", "SIN ASIGNAR")).strip().upper() or "SIN ASIGNAR"
+        semi = str(fila.get("Semi", "")).strip().upper()
+        hora = limpiar_hora(fila.get("Hora", ""))
+        completa = str(cfg.get("completa", fila.get("Descarga completa", "NO"))).strip().upper()
+        env = str(cfg.get("envases", fila.get("Retira envases", "NO"))).strip().upper()
+        termica = termica_operativa_manual(cfg.get("termica", ""), fila.get("Descripción térmica", ""))
+
+        plan.setdefault(ch, []).append({
+            "hora": hora,
+            "semi": semi,
+            "descarga": completa,
+            "envases": env,
+            "accion": "Servicio Mercadona",
+            "tipo": "servicio",
+        })
+
+        servicios += 1
+        semis.add(semi)
+        if ch != "SIN ASIGNAR":
+            choferes.add(ch)
+        if es_carga_fria(termica):
+            frio += 1
+        if env == "SI":
+            envases_total += 1
+
+        if str(cfg.get("gestion_envases_0530", "")).startswith("Envases pendientes"):
+            plan.setdefault(ch, []).append({
+                "hora": "---",
+                "semi": semi,
+                "descarga": "---",
+                "envases": "SI",
+                "accion": "Recogida envases pendiente",
+                "tipo": "envases",
+            })
+            envases_total += 1
+
+    return plan, {
+        "servicios": servicios,
+        "semis": len(semis),
+        "choferes": len(choferes),
+        "frio": frio,
+        "envases": envases_total,
+    }
+
+
+def generar_plan_interno(df_servicios, config_servicios):
+    plan, _ = generar_plan_interno_datos(df_servicios, config_servicios)
+    if not plan:
+        return ""
+    bloques = ["🔧 PLAN INTERNO NIEVES S.A."]
+    for ch, lineas in plan.items():
+        bloques.append(f"\n{ch}:")
+        for item in lineas:
+            if item["tipo"] == "envases":
+                bloques.append(f"- Tras servicio posterior → {item['semi']} (recogida envases pendiente)")
+            else:
+                bloques.append(f"- {item['hora']}h → {item['semi']} ({item['descarga']} descarga / {item['envases']} envases)")
+    return "\n".join(bloques)
+
+
+def generar_plan_interno_html(df_servicios, config_servicios, fecha_objetivo=None):
+    plan, resumen = generar_plan_interno_datos(df_servicios, config_servicios)
+    if not plan:
+        return ""
+
+    fecha_txt = fecha_objetivo.strftime("%d/%m/%Y") if fecha_objetivo else ""
+    generado_txt = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    html = f"""
+    <style>
+        .plan-nieves-wrap {{
+            font-family: Arial, Helvetica, sans-serif;
+            background: #ffffff;
+            color: #111827;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 22px 26px;
+            box-shadow: 0 8px 24px rgba(15,23,42,.08);
+            max-width: 980px;
+        }}
+        .plan-nieves-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 18px;
+            border-bottom: 2px solid #111827;
+            padding-bottom: 14px;
+            margin-bottom: 18px;
+        }}
+        .plan-nieves-title {{
+            font-size: 25px;
+            font-weight: 900;
+            margin: 0 0 6px 0;
+        }}
+        .plan-nieves-sub {{
+            font-size: 13px;
+            color: #4b5563;
+            line-height: 1.45;
+        }}
+        .plan-nieves-chip {{
+            display: inline-block;
+            background: #007a3d;
+            color: white;
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: 800;
+            white-space: nowrap;
+        }}
+        .plan-driver {{
+            margin-top: 24px;
+            padding-top: 8px;
+            border-top: 1px solid #d1d5db;
+        }}
+        .plan-driver h3 {{
+            font-size: 20px;
+            margin: 10px 0 10px 0;
+            font-weight: 900;
+            color: #111827;
+        }}
+        .plan-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-bottom: 22px;
+        }}
+        .plan-table th {{
+            text-align: left;
+            padding: 9px 8px;
+            border-bottom: 1px solid #cbd5e1;
+            color: #111827;
+            font-weight: 900;
+            background: #f8fafc;
+        }}
+        .plan-table td {{
+            padding: 10px 8px;
+            border-bottom: 1px solid #eef2f7;
+            vertical-align: top;
+        }}
+        .plan-table tr.envases-row td {{
+            background: #fefce8;
+            color: #713f12;
+            font-weight: 700;
+        }}
+        .pill-si {{ color: #166534; font-weight: 900; }}
+        .pill-no {{ color: #991b1b; font-weight: 900; }}
+        .summary-box {{
+            margin-top: 26px;
+            border-top: 1px solid #d1d5db;
+            padding-top: 18px;
+        }}
+        .summary-title {{
+            font-size: 20px;
+            font-weight: 900;
+            margin-bottom: 10px;
+        }}
+        .summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(5, minmax(110px, 1fr));
+            gap: 10px;
+        }}
+        .summary-card {{
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 12px;
+            background: #f8fafc;
+        }}
+        .summary-card .label {{
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 800;
+        }}
+        .summary-card .value {{
+            font-size: 24px;
+            font-weight: 900;
+            color: #111827;
+            margin-top: 4px;
+        }}
+        .print-note {{
+            margin-top: 18px;
+            font-size: 11px;
+            color: #64748b;
+            text-align: right;
+        }}
+    </style>
+    <div class="plan-nieves-wrap" id="plan-interno-nieves">
+        <div class="plan-nieves-header">
+            <div>
+                <div class="plan-nieves-title">🔧 PLAN INTERNO NIEVES S.A.</div>
+                <div class="plan-nieves-sub">
+                    <strong>Operativa Mercadona Melilla</strong><br>
+                    Fecha operativa: <strong>{_escape_html(fecha_txt)}</strong><br>
+                    Generado: {_escape_html(generado_txt)}
+                </div>
+            </div>
+            <div class="plan-nieves-chip">Transportes Nieves S.A. · C-4402</div>
+        </div>
+    """
+
+    for ch, items in plan.items():
+        html += f"""
+        <section class="plan-driver">
+            <h3>👨 {_escape_html(ch)}</h3>
+            <table class="plan-table">
+                <thead>
+                    <tr>
+                        <th style="width:60px;">Nº</th>
+                        <th style="width:110px;">Hora</th>
+                        <th style="width:130px;">Semi</th>
+                        <th style="width:115px;">Descarga</th>
+                        <th style="width:115px;">Envases</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        for n, item in enumerate(items, start=1):
+            row_class = "envases-row" if item["tipo"] == "envases" else ""
+            descarga = _escape_html(item["descarga"])
+            env = _escape_html(item["envases"])
+            descarga_html = '<span class="pill-si">✅ SI</span>' if descarga == "SI" else ('<span class="pill-no">❌ NO</span>' if descarga == "NO" else descarga)
+            env_html = '<span class="pill-si">✅ SI</span>' if env == "SI" else ('<span class="pill-no">❌ NO</span>' if env == "NO" else env)
+            accion = "♻️ " + item["accion"] if item["tipo"] == "envases" else item["accion"]
+            html += f"""
+                    <tr class="{row_class}">
+                        <td>{n}</td>
+                        <td>{_escape_html(item["hora"])}</td>
+                        <td><strong>{_escape_html(item["semi"])}</strong></td>
+                        <td>{descarga_html}</td>
+                        <td>{env_html}</td>
+                        <td>{_escape_html(accion)}</td>
+                    </tr>
+            """
+        html += """
+                </tbody>
+            </table>
+        </section>
+        """
+
+    html += f"""
+        <div class="summary-box">
+            <div class="summary-title">📊 RESUMEN OPERATIVO</div>
+            <div class="summary-grid">
+                <div class="summary-card"><div class="label">Servicios</div><div class="value">{resumen["servicios"]}</div></div>
+                <div class="summary-card"><div class="label">Semis</div><div class="value">{resumen["semis"]}</div></div>
+                <div class="summary-card"><div class="label">Chóferes</div><div class="value">{resumen["choferes"]}</div></div>
+                <div class="summary-card"><div class="label">Frío</div><div class="value">{resumen["frio"]}</div></div>
+                <div class="summary-card"><div class="label">Envases</div><div class="value">{resumen["envases"]}</div></div>
+            </div>
+        </div>
+        <div class="print-note">Documento interno generado por OP_Mercadona · Transportes Nieves S.A.</div>
+    </div>
+    """
+    return html
+
 
 def generar_texto(fecha_objetivo, df_servicios, df_llegadas, config_servicios, modo, margen_minutos):
     texto = generar_bloque_llegadas(fecha_objetivo, df_servicios, df_llegadas)
@@ -1029,8 +1295,41 @@ with tabs_rendered[0]:
                 mc4.metric("Envases", res["Servicios con envases"])
 
                 plan_int = generar_plan_interno(st.session_state.df_servicios, config_servicios)
-                if plan_int:
-                    with st.expander("🔧 Ver plan interno NIEVES"): st.text_area("Plan", plan_int, height=200)
+                plan_int_html = generar_plan_interno_html(st.session_state.df_servicios, config_servicios, fecha_obj)
+                if plan_int_html:
+                    with st.expander("🔧 Ver plan interno NIEVES S.A.", expanded=False):
+                        st.markdown(plan_int_html, unsafe_allow_html=True)
+
+                        html_descarga = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Plan Interno NIEVES S.A.</title>
+</head>
+<body>
+{plan_int_html}
+<script>
+window.onload = function() {{
+    setTimeout(function() {{
+        window.print();
+    }}, 350);
+}};
+</script>
+</body>
+</html>"""
+
+                        col_plan_a, col_plan_b = st.columns([1, 3])
+                        with col_plan_a:
+                            st.download_button(
+                                "🖨️ Descargar / imprimir HTML",
+                                data=html_descarga,
+                                file_name=f"plan_interno_nieves_{fecha_obj.strftime('%Y%m%d')}.html",
+                                mime="text/html",
+                                key="descargar_plan_interno_html"
+                            )
+                        with col_plan_b:
+                            with st.expander("Ver texto simple para copiar", expanded=False):
+                                st.text_area("Plan simple", plan_int, height=180)
 
                 st.markdown("### Alertas operativas")
                 alertas_op = detectar_alertas_operativas(st.session_state.df_servicios, config_servicios)
