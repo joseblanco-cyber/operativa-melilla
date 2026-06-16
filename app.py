@@ -7,6 +7,7 @@ import base64
 import uuid
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from io import BytesIO
 from urllib.parse import quote
 
 # 1. IMPORTACIONES DE NUESTROS MÓDULOS EN /UTILS
@@ -19,7 +20,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.4"
+APP_VERSION = "1.8.5"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -600,6 +601,13 @@ def _escape_html(valor):
 
 
 def generar_plan_interno_datos(df_servicios, config_servicios):
+    """
+    Estructura del Plan Interno NIEVES.
+    Importante:
+    - Si 05:30 tiene "Envases pendientes", el servicio principal muestra Envases NO.
+    - La recogida pendiente aparece como una línea propia.
+    - El resumen cuenta la recogida una sola vez.
+    """
     if df_servicios is None or df_servicios.empty:
         return {}, {"servicios": 0, "semis": 0, "choferes": 0, "frio": 0, "envases": 0}
 
@@ -619,14 +627,17 @@ def generar_plan_interno_datos(df_servicios, config_servicios):
         semi = str(fila.get("Semi", "")).strip().upper()
         hora = limpiar_hora(fila.get("Hora", ""))
         completa = str(cfg.get("completa", fila.get("Descarga completa", "NO"))).strip().upper()
-        env = str(cfg.get("envases", fila.get("Retira envases", "NO"))).strip().upper()
+        env_original = str(cfg.get("envases", fila.get("Retira envases", "NO"))).strip().upper()
+        gestion_0530 = str(cfg.get("gestion_envases_0530", "")).strip()
+        tiene_envases_pendientes = gestion_0530.startswith("Envases pendientes")
+        env_servicio = "NO" if tiene_envases_pendientes else env_original
         termica = termica_operativa_manual(cfg.get("termica", ""), fila.get("Descripción térmica", ""))
 
         plan.setdefault(ch, []).append({
             "hora": hora,
             "semi": semi,
             "descarga": completa,
-            "envases": env,
+            "envases": env_servicio,
             "accion": "Servicio Mercadona",
             "tipo": "servicio",
         })
@@ -637,10 +648,8 @@ def generar_plan_interno_datos(df_servicios, config_servicios):
             choferes.add(ch)
         if es_carga_fria(termica):
             frio += 1
-        if env == "SI":
-            envases_total += 1
 
-        if str(cfg.get("gestion_envases_0530", "")).startswith("Envases pendientes"):
+        if tiene_envases_pendientes:
             plan.setdefault(ch, []).append({
                 "hora": "---",
                 "semi": semi,
@@ -649,6 +658,8 @@ def generar_plan_interno_datos(df_servicios, config_servicios):
                 "accion": "Recogida envases pendiente",
                 "tipo": "envases",
             })
+            envases_total += 1
+        elif env_original == "SI":
             envases_total += 1
 
     return plan, {
@@ -664,14 +675,14 @@ def generar_plan_interno(df_servicios, config_servicios):
     plan, _ = generar_plan_interno_datos(df_servicios, config_servicios)
     if not plan:
         return ""
-    bloques = ["🔧 PLAN INTERNO NIEVES S.A."]
+    bloques = ["PLAN INTERNO NIEVES S.A."]
     for ch, lineas in plan.items():
         bloques.append(f"\n{ch}:")
         for item in lineas:
             if item["tipo"] == "envases":
-                bloques.append(f"- Tras servicio posterior → {item['semi']} (recogida envases pendiente)")
+                bloques.append(f"- Tras servicio posterior -> {item['semi']} (recogida envases pendiente)")
             else:
-                bloques.append(f"- {item['hora']}h → {item['semi']} ({item['descarga']} descarga / {item['envases']} envases)")
+                bloques.append(f"- {item['hora']}h -> {item['semi']} ({item['descarga']} descarga / {item['envases']} envases)")
     return "\n".join(bloques)
 
 
@@ -862,13 +873,155 @@ def generar_plan_interno_html(df_servicios, config_servicios, fecha_objetivo=Non
                 <div class="summary-card"><div class="label">Semis</div><div class="value">{resumen["semis"]}</div></div>
                 <div class="summary-card"><div class="label">Chóferes</div><div class="value">{resumen["choferes"]}</div></div>
                 <div class="summary-card"><div class="label">Frío</div><div class="value">{resumen["frio"]}</div></div>
-                <div class="summary-card"><div class="label">Envases</div><div class="value">{resumen["envases"]}</div></div>
+                <div class="summary-card"><div class="label">Recogidas envases</div><div class="value">{resumen["envases"]}</div></div>
             </div>
         </div>
         <div class="print-note">Documento interno generado por OP_Mercadona · Transportes Nieves S.A.</div>
     </div>
     """
     return html
+
+
+def generar_plan_interno_pdf(df_servicios, config_servicios, fecha_objetivo=None):
+    """
+    Genera PDF real del Plan Interno NIEVES.
+    Requiere reportlab en requirements.txt.
+    """
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    except Exception as e:
+        raise RuntimeError("Falta la librería reportlab. Añade 'reportlab' a requirements.txt para generar PDF.") from e
+
+    plan, resumen = generar_plan_interno_datos(df_servicios, config_servicios)
+    if not plan:
+        return b""
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=1.3 * cm,
+        leftMargin=1.3 * cm,
+        topMargin=1.2 * cm,
+        bottomMargin=1.2 * cm,
+        title="Plan Interno NIEVES S.A.",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "PlanTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=6,
+    )
+    sub_style = ParagraphStyle(
+        "PlanSub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#4b5563"),
+    )
+    driver_style = ParagraphStyle(
+        "DriverTitle",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=13,
+        leading=16,
+        textColor=colors.HexColor("#111827"),
+        spaceBefore=12,
+        spaceAfter=6,
+    )
+    small_style = ParagraphStyle(
+        "Small",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#64748b"),
+    )
+
+    fecha_txt = fecha_objetivo.strftime("%d/%m/%Y") if fecha_objetivo else ""
+    generado_txt = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    story = []
+    story.append(Paragraph("PLAN INTERNO NIEVES S.A.", title_style))
+    story.append(Paragraph(f"<b>Operativa Mercadona Melilla</b><br/>Fecha operativa: <b>{fecha_txt}</b><br/>Generado: {generado_txt}<br/>Transportes Nieves S.A. - C-4402", sub_style))
+    story.append(Spacer(1, 0.35 * cm))
+
+    for ch, items in plan.items():
+        story.append(Paragraph(ch, driver_style))
+
+        data = [["Nº", "Hora", "Semi", "Descarga", "Envases", "Acción"]]
+        row_styles = []
+        for n, item in enumerate(items, start=1):
+            data.append([
+                str(n),
+                str(item["hora"]),
+                str(item["semi"]),
+                str(item["descarga"]),
+                str(item["envases"]),
+                str(item["accion"]),
+            ])
+            if item["tipo"] == "envases":
+                row_styles.append(len(data) - 1)
+
+        table = Table(data, colWidths=[1.0*cm, 1.8*cm, 2.5*cm, 2.1*cm, 2.1*cm, 7.6*cm])
+        style_cmds = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#e5e7eb")),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.7, colors.HexColor("#94a3b8")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fbfdff")]),
+        ]
+
+        for r in row_styles:
+            style_cmds.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#fefce8")))
+            style_cmds.append(("TEXTCOLOR", (0, r), (-1, r), colors.HexColor("#713f12")))
+            style_cmds.append(("FONTNAME", (0, r), (-1, r), "Helvetica-Bold"))
+
+        table.setStyle(TableStyle(style_cmds))
+        story.append(table)
+        story.append(Spacer(1, 0.25 * cm))
+
+    story.append(Spacer(1, 0.25 * cm))
+    story.append(Paragraph("RESUMEN OPERATIVO", driver_style))
+
+    resumen_data = [
+        ["Servicios", "Semis", "Chóferes", "Frío", "Recogidas envases"],
+        [str(resumen["servicios"]), str(resumen["semis"]), str(resumen["choferes"]), str(resumen["frio"]), str(resumen["envases"])],
+    ]
+    resumen_table = Table(resumen_data, colWidths=[3.2*cm, 3.2*cm, 3.2*cm, 3.2*cm, 4.0*cm])
+    resumen_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 8),
+        ("FONTSIZE", (0, 1), (-1, 1), 16),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#e5e7eb")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#ffffff")),
+        ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#111827")),
+    ]))
+    story.append(resumen_table)
+    story.append(Spacer(1, 0.25 * cm))
+    story.append(Paragraph("Documento interno generado por OP_Mercadona - Transportes Nieves S.A.", small_style))
+
+    doc.build(story)
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
 
 
 def generar_texto(fecha_objetivo, df_servicios, df_llegadas, config_servicios, modo, margen_minutos):
@@ -1300,33 +1453,20 @@ with tabs_rendered[0]:
                     with st.expander("🔧 Ver plan interno NIEVES S.A.", expanded=False):
                         st.markdown(plan_int_html, unsafe_allow_html=True)
 
-                        html_descarga = f"""<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<title>Plan Interno NIEVES S.A.</title>
-</head>
-<body>
-{plan_int_html}
-<script>
-window.onload = function() {{
-    setTimeout(function() {{
-        window.print();
-    }}, 350);
-}};
-</script>
-</body>
-</html>"""
-
                         col_plan_a, col_plan_b = st.columns([1, 3])
                         with col_plan_a:
-                            st.download_button(
-                                "🖨️ Descargar / imprimir HTML",
-                                data=html_descarga,
-                                file_name=f"plan_interno_nieves_{fecha_obj.strftime('%Y%m%d')}.html",
-                                mime="text/html",
-                                key="descargar_plan_interno_html"
-                            )
+                            try:
+                                pdf_plan = generar_plan_interno_pdf(st.session_state.df_servicios, config_servicios, fecha_obj)
+                                st.download_button(
+                                    "📄 Descargar PDF",
+                                    data=pdf_plan,
+                                    file_name=f"plan_interno_nieves_{fecha_obj.strftime('%Y%m%d')}.pdf",
+                                    mime="application/pdf",
+                                    key="descargar_plan_interno_pdf"
+                                )
+                            except Exception as e:
+                                st.warning(str(e))
+
                         with col_plan_b:
                             with st.expander("Ver texto simple para copiar", expanded=False):
                                 st.text_area("Plan simple", plan_int, height=180)
