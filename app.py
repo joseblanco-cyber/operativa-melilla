@@ -20,7 +20,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.5"
+APP_VERSION = "1.8.6"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -1448,28 +1448,18 @@ with tabs_rendered[0]:
                 mc4.metric("Envases", res["Servicios con envases"])
 
                 plan_int = generar_plan_interno(st.session_state.df_servicios, config_servicios)
-                plan_int_html = generar_plan_interno_html(st.session_state.df_servicios, config_servicios, fecha_obj)
-                if plan_int_html:
-                    with st.expander("🔧 Ver plan interno NIEVES S.A.", expanded=False):
-                        st.markdown(plan_int_html, unsafe_allow_html=True)
-
-                        col_plan_a, col_plan_b = st.columns([1, 3])
-                        with col_plan_a:
-                            try:
-                                pdf_plan = generar_plan_interno_pdf(st.session_state.df_servicios, config_servicios, fecha_obj)
-                                st.download_button(
-                                    "📄 Descargar PDF",
-                                    data=pdf_plan,
-                                    file_name=f"plan_interno_nieves_{fecha_obj.strftime('%Y%m%d')}.pdf",
-                                    mime="application/pdf",
-                                    key="descargar_plan_interno_pdf"
-                                )
-                            except Exception as e:
-                                st.warning(str(e))
-
-                        with col_plan_b:
-                            with st.expander("Ver texto simple para copiar", expanded=False):
-                                st.text_area("Plan simple", plan_int, height=180)
+                if plan_int:
+                    try:
+                        pdf_plan = generar_plan_interno_pdf(st.session_state.df_servicios, config_servicios, fecha_obj)
+                        st.download_button(
+                            "🔧 P. Interno PDF",
+                            data=pdf_plan,
+                            file_name=f"plan_interno_nieves_{fecha_obj.strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                            key="descargar_plan_interno_pdf"
+                        )
+                    except Exception as e:
+                        st.warning(str(e))
 
                 st.markdown("### Alertas operativas")
                 alertas_op = detectar_alertas_operativas(st.session_state.df_servicios, config_servicios)
