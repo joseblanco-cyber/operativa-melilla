@@ -14,7 +14,7 @@ DEFAULT_CHOFERES = [
     {"nombre": "AMIN", "activo": "SI", "telefono": "665975989"},
     {"nombre": "BRAHIM", "activo": "NO", "telefono": "662668908"},
     {"nombre": "CHAFIK", "activo": "SI", "telefono": "600877912"},
-    {"nombre": "CUCU", "activo": "SI", "telefono": "629588545"},
+    {"nombre": "CUCU", "activo": "SI", "telefono": "629588445"},
     {"nombre": "IBRAHIM", "activo": "SI", "telefono": "612200766"},
     {"nombre": "KARIM HALIFA", "activo": "NO", "telefono": "662926599"},
     {"nombre": "MOHAMED CHILAH", "activo": "SI", "telefono": "687131337"},
