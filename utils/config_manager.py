@@ -86,7 +86,64 @@ def crear_config_si_no_existe():
         ruta_textos.write_text(json.dumps(DEFAULT_TEXTOS, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def fusionar_telefonos_default_choferes(df_choferes):
-    return pd.DataFrame(DEFAULT_CHOFERES, columns=["nombre", "activo", "telefono"])
+    """
+    Fusiona la lista base de chóferes con el CSV editable.
+
+    Regla importante:
+    - Si un chófer ya existe en choferes.csv, se respeta su teléfono y su estado activo.
+    - DEFAULT_CHOFERES solo se usa para añadir chóferes nuevos o rellenar campos vacíos.
+    - Nunca debe sobrescribir un teléfono modificado desde Configuración.
+    """
+    columnas = ["nombre", "activo", "telefono"]
+
+    df_csv = df_choferes.copy() if df_choferes is not None else pd.DataFrame(columns=columnas)
+    for col in columnas:
+        if col not in df_csv.columns:
+            df_csv[col] = ""
+
+    df_csv = df_csv[columnas].fillna("")
+    defaults = pd.DataFrame(DEFAULT_CHOFERES, columns=columnas).fillna("")
+
+    existentes = {}
+    for _, row in df_csv.iterrows():
+        nombre_key = str(row.get("nombre", "")).strip().upper()
+        if nombre_key:
+            existentes[nombre_key] = {
+                "nombre": str(row.get("nombre", "")).strip(),
+                "activo": str(row.get("activo", "")).strip(),
+                "telefono": str(row.get("telefono", "")).strip(),
+            }
+
+    filas = []
+
+    # Primero, mantener el orden base de DEFAULT_CHOFERES, pero respetando datos editados en CSV.
+    for _, row_def in defaults.iterrows():
+        nombre_def = str(row_def.get("nombre", "")).strip()
+        key = nombre_def.upper()
+        row_csv = existentes.pop(key, None)
+
+        if row_csv:
+            filas.append({
+                "nombre": row_csv.get("nombre") or nombre_def,
+                "activo": row_csv.get("activo") or str(row_def.get("activo", "SI")).strip(),
+                "telefono": row_csv.get("telefono") or str(row_def.get("telefono", "")).strip(),
+            })
+        else:
+            filas.append({
+                "nombre": nombre_def,
+                "activo": str(row_def.get("activo", "SI")).strip(),
+                "telefono": str(row_def.get("telefono", "")).strip(),
+            })
+
+    # Después, conservar chóferes añadidos manualmente que no estén en DEFAULT_CHOFERES.
+    for _, row_csv in existentes.items():
+        filas.append({
+            "nombre": row_csv.get("nombre", ""),
+            "activo": row_csv.get("activo") or "SI",
+            "telefono": row_csv.get("telefono", ""),
+        })
+
+    return pd.DataFrame(filas, columns=columnas)
 
 # --- OPTIMIZACIÓN CON CACHÉ ---
 # Guardamos los datos en caché para evitar lecturas de disco innecesarias.
@@ -113,7 +170,7 @@ def cargar_textos():
     if not ruta.exists():
         ruta.write_text(json.dumps(DEFAULT_TEXTOS, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
-        textos = json.loads(ruta.write_text(encoding="utf-8"))
+        textos = json.loads(ruta.read_text(encoding="utf-8"))
     except Exception:
         textos = DEFAULT_TEXTOS.copy()
 
