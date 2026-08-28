@@ -20,7 +20,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.6"
+APP_VERSION = "1.8.9"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -164,6 +164,28 @@ def descripcion_termica(categories_ordered, marks_detected):
 def debe_mostrar_origen(origen):
     origen_limpio = str(origen).strip()
     return origen_limpio and origen_limpio.upper() != "DESDE EL PUERTO"
+
+def sugerir_hora_sabado(hora):
+    """Propone -2h SOLO para sábado y solo si el archivo trae >=21:30."""
+    h = limpiar_hora(hora)
+    mins = hora_a_minutos(h)
+    if mins == 9999 or mins < hora_a_minutos("21:30"):
+        return h
+    nuevo = mins - 120
+    return f"{nuevo // 60:02d}:{nuevo % 60:02d}"
+
+
+def hora_operativa_servicio(fila, cfg):
+    """Hora efectiva confirmada; si no hay ajuste conserva la detectada."""
+    return limpiar_hora(cfg.get("hora_operativa", cfg.get("hora", fila.get("Hora", ""))))
+
+
+def turno_operativo_servicio(fila, cfg):
+    """Un nocturno adelantado de sábado conserva su turno NOCHE."""
+    if cfg.get("ajuste_sabado_desde_noche", False):
+        return "NOCHE"
+    return turno_por_hora(hora_operativa_servicio(fila, cfg))
+
 
 def turno_por_hora(hora):
     minutos = hora_a_minutos(hora)
@@ -625,7 +647,7 @@ def generar_plan_interno_datos(df_servicios, config_servicios):
 
         ch = str(cfg.get("chofer", "SIN ASIGNAR")).strip().upper() or "SIN ASIGNAR"
         semi = str(fila.get("Semi", "")).strip().upper()
-        hora = limpiar_hora(fila.get("Hora", ""))
+        hora = hora_operativa_servicio(fila, cfg)
         completa = str(cfg.get("completa", fila.get("Descarga completa", "NO"))).strip().upper()
         env_original = str(cfg.get("envases", fila.get("Retira envases", "NO"))).strip().upper()
         gestion_0530 = str(cfg.get("gestion_envases_0530", "")).strip()
@@ -1029,56 +1051,205 @@ def generar_texto(fecha_objetivo, df_servicios, df_llegadas, config_servicios, m
     recogidas_0530_pendientes, historial_semis = [], {}
 
     if df_servicios is not None and not df_servicios.empty:
-        primera_op, primera_hora, turno_act = True, limpiar_hora(df_servicios.iloc[0]["Hora"]), None
-        contadores = {"MAÑANA": {}, "TARDE": {}, "NOCHE": {}}
+        items = []
+        for idx, fila in df_servicios.iterrows():
+            cfg = config_servicios.get(f"{fila['Semi']}_{fila['Hora']}_{idx}", {})
+            if not cfg.get("incluir", True):
+                continue
+            h_op = hora_operativa_servicio(fila, cfg)
+            items.append((hora_a_minutos(h_op), h_op, idx, fila, cfg))
 
-        for hora, grupo in df_servicios.groupby("Hora", sort=False):
-            h_limpia = limpiar_hora(hora)
-            turno = "MAÑANA" if hora_a_minutos(h_limpia) < 14*60 else ("TARDE" if hora_a_minutos(h_limpia) < 20*60 else "NOCHE")
-            if turno != turno_act:
-                texto += titulo_turno(turno) + "\n\n"
-                turno_act = turno
-            texto += f"---------*OPERATIVA MERCADONA {dia_semana_es(fecha_objetivo)} {fecha_objetivo.strftime('%d/%m/%y')} {h_limpia}H EN TIENDA*---------\n\n"
-            texto += TEXTOS.get("aviso_entrada", cfg_mod.DEFAULT_TEXTOS["aviso_entrada"]) + "\n\n" if primera_op else "⛔️ *Respetar hora MERCADONA*\n\n"
-            primera_op = False
+        items.sort(key=lambda x: (x[0], str(x[3].get("Semi", ""))))
+        if items:
+            primera_op = True
+            primera_hora = items[0][1]
+            turno_act = None
+            contadores = {"MAÑANA": {}, "TARDE": {}, "NOCHE": {}}
+            grupos = {}
+            for _, h_op, idx, fila, cfg in items:
+                grupos.setdefault(h_op, []).append((idx, fila, cfg))
 
-            for idx, fila in grupo.iterrows():
-                cfg = config_servicios.get(f"{fila['Semi']}_{fila['Hora']}_{idx}", {})
-                if not cfg.get("incluir", True): continue
-                semi = fila["Semi"]
-                name_ch = nombre_chofer_formateado(cfg.get("chofer", "SIN ASIGNAR"), cfg.get("acompanante", ""))
-                comp, env = cfg.get("completa", fila["Descarga completa"]), cfg.get("envases", fila["Retira envases"])
-                termica = termica_operativa_manual(cfg.get("termica", ""), fila["Descripción térmica"])
-                ch_key = str(cfg.get("chofer", "SIN ASIGNAR")).strip().upper()
+            for h_limpia in sorted(grupos, key=hora_a_minutos):
+                grupo = grupos[h_limpia]
+                turnos = [turno_operativo_servicio(f, c) for _, f, c in grupo]
+                turno = "NOCHE" if "NOCHE" in turnos else turnos[0]
+                if turno != turno_act:
+                    texto += titulo_turno(turno) + "\n\n"
+                    turno_act = turno
+                texto += f"---------*OPERATIVA MERCADONA {dia_semana_es(fecha_objetivo)} {fecha_objetivo.strftime('%d/%m/%y')} {h_limpia}H EN TIENDA*---------\n\n"
+                texto += TEXTOS.get("aviso_entrada", cfg_mod.DEFAULT_TEXTOS["aviso_entrada"]) + "\n\n" if primera_op else "⛔️ *Respetar hora MERCADONA*\n\n"
+                primera_op = False
 
-                num_serv = contadores.setdefault(turno, {}).get(ch_key, 1)
-                if semi in historial_semis and historial_semis[semi]["completa"] == "NO" and comp == "SI":
-                    texto += f"{num_serv}º {restar_minutos(h_limpia, margen_minutos)}h _*{name_ch.upper()}*_ recoger en explanadas frente zona talleres el semi *{semi}*\n\n(SEMI PROCEDENTE DE DESCARGA PARCIAL DEL SERVICIO {historial_semis[semi]['hora']}h)\n\n"
-                else:
-                    texto += f"{num_serv}º {restar_minutos(h_limpia, margen_minutos)}h _*{name_ch.upper()}*_ enganchar el semi *{semi}*\n\n" + ("(SEMI CONTINÚA DE ANTERIOR)\n\n" if semi in historial_semis else "")
-                contadores[turno][ch_key] = num_serv + 1
+                for idx, fila, cfg in grupo:
+                    semi = fila["Semi"]
+                    name_ch = nombre_chofer_formateado(cfg.get("chofer", "SIN ASIGNAR"), cfg.get("acompanante", ""))
+                    comp, env = cfg.get("completa", fila["Descarga completa"]), cfg.get("envases", fila["Retira envases"])
+                    termica = termica_operativa_manual(cfg.get("termica", ""), fila["Descripción térmica"])
+                    ch_key = str(cfg.get("chofer", "SIN ASIGNAR")).strip().upper()
+                    num_serv = contadores.setdefault(turno, {}).get(ch_key, 1)
 
-                if debe_mostrar_origen(cfg.get("origen", origen_por_defecto(hora))) and semi not in historial_semis:
-                    texto += f"{cfg.get('origen', origen_por_defecto(hora))}\n\n"
-                texto += texto_condicion_descarga(comp, env, cfg.get("gestion_envases_0530", "Normal")) + "\n\n"
-                if texto_aviso_temperatura(termica): texto += texto_aviso_temperatura(termica) + "\n\n"
-                if cfg.get("incidencia", "").strip(): texto += f"⚠️ *INCIDENCIA:* {cfg.get('incidencia')}\n\n"
-                if cfg.get("observacion", "").strip(): texto += f"{cfg.get('observacion')}\n\n"
-                if texto_post_descarga(comp, env, cfg.get("gestion_envases_0530", "Normal")): texto += texto_post_descarga(comp, env, cfg.get("gestion_envases_0530", "Normal")) + "\n\n"
+                    if semi in historial_semis and historial_semis[semi]["completa"] == "NO" and comp == "SI":
+                        texto += f"{num_serv}º {restar_minutos(h_limpia, margen_minutos)}h _*{name_ch.upper()}*_ recoger en explanadas frente zona talleres el semi *{semi}*\n\n(SEMI PROCEDENTE DE DESCARGA PARCIAL DEL SERVICIO {historial_semis[semi]['hora']}h)\n\n"
+                    else:
+                        texto += f"{num_serv}º {restar_minutos(h_limpia, margen_minutos)}h _*{name_ch.upper()}*_ enganchar el semi *{semi}*\n\n" + ("(SEMI CONTINÚA DE ANTERIOR)\n\n" if semi in historial_semis else "")
+                    contadores[turno][ch_key] = num_serv + 1
 
-                if h_limpia == primera_hora and str(cfg.get("gestion_envases_0530", "")).startswith("Envases pendientes"):
-                    recogidas_0530_pendientes.append({"semi": semi, "chofer": name_ch.upper(), "ch_key": ch_key, "hora": h_limpia})
-                historial_semis[semi] = {"completa": comp, "hora": h_limpia}
+                    if debe_mostrar_origen(cfg.get("origen", origen_por_defecto(fila["Hora"]))) and semi not in historial_semis:
+                        texto += f"{cfg.get('origen', origen_por_defecto(fila['Hora']))}\n\n"
+                    texto += texto_condicion_descarga(comp, env, cfg.get("gestion_envases_0530", "Normal")) + "\n\n"
+                    if texto_aviso_temperatura(termica): texto += texto_aviso_temperatura(termica) + "\n\n"
+                    if cfg.get("incidencia", "").strip(): texto += f"⚠️ *INCIDENCIA:* {cfg.get('incidencia')}\n\n"
+                    if cfg.get("observacion", "").strip(): texto += f"{cfg.get('observacion')}\n\n"
+                    if texto_post_descarga(comp, env, cfg.get("gestion_envases_0530", "Normal")): texto += texto_post_descarga(comp, env, cfg.get("gestion_envases_0530", "Normal")) + "\n\n"
 
-            if recogidas_0530_pendientes and h_limpia != primera_hora:
-                for p in recogidas_0530_pendientes:
-                    num_serv = contadores.setdefault(turno, {}).get(p["ch_key"], 1)
-                    texto += f"{num_serv}º _*{p['chofer']}*_ Desde zona talleres enganchar el semi *{p['semi']}* y regresar a Mercadona para cargar envases.\n\n(RECOGIDA ENVASES – SEMI PRIMERA ENTREGA {p['hora']}h)\n\n*Enviad 📸 de la carga e informad de BARRAS, SEPARADORES y ESLINGAS*\n\n"
-                    contadores[turno][p["ch_key"]] = num_serv + 1
-                    historial_semis[p["semi"]] = {"completa": "SI", "hora": h_limpia}
-                recogidas_0530_pendientes = []
-            texto += "*----------//----------*\n\n\n"
+                    if h_limpia == primera_hora and str(cfg.get("gestion_envases_0530", "")).startswith("Envases pendientes"):
+                        recogidas_0530_pendientes.append({"semi": semi, "chofer": name_ch.upper(), "ch_key": ch_key, "hora": h_limpia})
+                    historial_semis[semi] = {"completa": comp, "hora": h_limpia}
+
+                if recogidas_0530_pendientes and h_limpia != primera_hora:
+                    for p in recogidas_0530_pendientes:
+                        num_serv = contadores.setdefault(turno, {}).get(p["ch_key"], 1)
+                        texto += f"{num_serv}º _*{p['chofer']}*_ Desde zona talleres enganchar el semi *{p['semi']}* y regresar a Mercadona para cargar envases.\n\n(RECOGIDA ENVASES – SEMI PRIMERA ENTREGA {p['hora']}h)\n\n*Enviad 📸 de la carga e informad de BARRAS, SEPARADORES y ESLINGAS*\n\n"
+                        contadores[turno][p["ch_key"]] = num_serv + 1
+                    recogidas_0530_pendientes = []
+                texto += "*----------//----------*\n\n\n"
+
     return limpiar_texto_whatsapp(texto + aviso_final_por_modo(modo) + "\n\n" + TEXTOS.get("cierre", cfg_mod.DEFAULT_TEXTOS["cierre"]))
+
+
+CONTROL_TIPOS_CARGA = [
+    "TODO SECO",
+    "TODO REFRIGERADO 3º",
+    "TODO CONGELADO -25º",
+    "DELANTERO SECO / TRASERO REFRIGERADO 3º",
+    "DELANTERO SECO / TRASERO CONGELADO -25º",
+    "DELANTERO REFRIGERADO 3º / TRASERO SECO",
+    "DELANTERO REFRIGERADO 3º / TRASERO CONGELADO -25º",
+    "OTRO",
+]
+
+
+def _partes_delantero_trasero(descripcion):
+    desc = str(descripcion or "").strip()
+    m = re.match(r"^\s*DELANTERO\s+(.*?)\s*/\s*TRASERO\s+(.*?)\s*$", desc, flags=re.I)
+    if not m:
+        return None, None
+    return m.group(1).strip(), m.group(2).strip()
+
+
+def _descripcion_control_servicio(servicio, servicios_mismo_semi):
+    termica = str(servicio["termica"]).strip()
+    delantero, trasero = _partes_delantero_trasero(termica)
+    if not delantero or not trasero:
+        return termica
+
+    actual_orden = servicio["orden"]
+    misma_termica = [
+        s for s in servicios_mismo_semi
+        if str(s["termica"]).strip().upper() == termica.upper()
+    ]
+    posteriores_completos = [s for s in misma_termica if s["orden"] > actual_orden and s["completa"] == "SI"]
+    anteriores_parciales = [s for s in misma_termica if s["orden"] < actual_orden and s["completa"] == "NO"]
+
+    if servicio["completa"] == "NO" and posteriores_completos:
+        return f"TRASERO {trasero}"
+    if servicio["completa"] == "SI" and anteriores_parciales:
+        return f"DELANTERO {delantero}"
+    return termica
+
+
+def generar_control_entregas_whatsapp(fecha_objetivo, df_servicios, config_servicios, previsiones_adicionales=None):
+    previsiones_adicionales = previsiones_adicionales or []
+    servicios = []
+    semis_unicos = set()
+    pendientes_envases = []
+
+    if df_servicios is not None and not df_servicios.empty:
+        for idx, fila in df_servicios.iterrows():
+            key = f"{fila['Semi']}_{fila['Hora']}_{idx}"
+            cfg = config_servicios.get(key, {})
+            if not cfg.get("incluir", True):
+                continue
+
+            hora = hora_operativa_servicio(fila, cfg)
+            semi = str(fila.get("Semi", "")).strip().upper()
+            completa = str(cfg.get("completa", fila.get("Descarga completa", "NO"))).strip().upper()
+            termica = termica_operativa_manual(cfg.get("termica", ""), fila.get("Descripción térmica", "")).strip() or "REVISAR"
+
+            servicios.append({
+                "tipo": "servicio",
+                "hora": hora,
+                "orden": hora_a_minutos(hora),
+                "semi": semi,
+                "completa": completa,
+                "termica": termica,
+            })
+            if semi:
+                semis_unicos.add(semi)
+
+            if str(cfg.get("gestion_envases_0530", "")).startswith("Envases pendientes"):
+                pendientes_envases.append({
+                    "semi": semi,
+                    "hora_origen": hora,
+                    "orden_origen": hora_a_minutos(hora),
+                })
+
+    servicios_por_semi = {}
+    for s in servicios:
+        servicios_por_semi.setdefault(s["semi"], []).append(s)
+
+    eventos = []
+    for s in servicios:
+        desc_control = _descripcion_control_servicio(s, servicios_por_semi.get(s["semi"], []))
+        eventos.append({
+            "tipo": "servicio",
+            "hora": s["hora"],
+            "orden": s["orden"],
+            "texto": f"Semi {desc_control} {s['hora']} ☑️",
+        })
+
+    for pendiente in pendientes_envases:
+        posteriores = sorted(
+            [s for s in servicios if s["orden"] > pendiente["orden_origen"]],
+            key=lambda x: (x["orden"], x["semi"])
+        )
+        orden_envases = (posteriores[0]["orden"] + 0.1) if posteriores else (pendiente["orden_origen"] + 0.1)
+        eventos.append({
+            "tipo": "envases",
+            "hora": "",
+            "orden": orden_envases,
+            "texto": "Semi recog envases ☑️",
+        })
+
+    previsiones_validas = []
+    for p in previsiones_adicionales:
+        hora = limpiar_hora(p.get("hora", ""))
+        carga = str(p.get("carga", "")).strip()
+        if not carga or hora_a_minutos(hora) == 9999:
+            continue
+        previsiones_validas.append({"hora": hora, "carga": carga})
+        eventos.append({
+            "tipo": "previsto",
+            "hora": hora,
+            "orden": hora_a_minutos(hora),
+            "texto": f"Semi {carga} {hora} ☑️",
+        })
+
+    if not eventos:
+        return ""
+
+    eventos = sorted(eventos, key=lambda e: (e["orden"], 1 if e["tipo"] == "envases" else 0))
+    semis = len(semis_unicos) + len(previsiones_validas)
+    arrastres = len(servicios) + len(pendientes_envases) + len(previsiones_validas)
+
+    return (
+        "Descarga en tienda fecha\n"
+        f"{fecha_objetivo.strftime('%d/%m/%y')}\n"
+        f"{semis} Semis {arrastres} arrastres\n\n"
+        "Entregas\n\n"
+        + "\n\n".join(e["texto"] for e in eventos)
+    )
+
 
 def construir_historico_servicios(fecha_objetivo, df_servicios, config_servicios, modo):
     filas = []
@@ -1086,10 +1257,10 @@ def construir_historico_servicios(fecha_objetivo, df_servicios, config_servicios
     for idx, fila in df_servicios.iterrows():
         cfg = config_servicios.get(f"{fila['Semi']}_{fila['Hora']}_{idx}", {})
         if not cfg.get("incluir", True): continue
-        turno_hist = turno_por_hora(fila["Hora"])
+        turno_hist = turno_operativo_servicio(fila, cfg)
         filas.append({
             "generado_por": st.session_state.get("usuario_nombre", ""), "fecha_operativa": fecha_objetivo.strftime("%Y-%m-%d"),
-            "dia_semana": dia_semana_es(fecha_objetivo), "modo": modo, "hora_tienda": limpiar_hora(fila["Hora"]),
+            "dia_semana": dia_semana_es(fecha_objetivo), "modo": modo, "hora_tienda": hora_operativa_servicio(fila, cfg),
             "turno": turno_hist, "semi": fila["Semi"],
             "chofer": cfg.get("chofer", "SIN ASIGNAR"), "acompanante_formacion": cfg.get("acompanante", ""),
             "naviera": fila.get("Naviera", ""), "puerto": fila.get("Puerto", ""), "descarga_completa": cfg.get("completa", fila["Descarga completa"]),
@@ -1100,7 +1271,7 @@ def construir_historico_servicios(fecha_objetivo, df_servicios, config_servicios
     return pd.DataFrame(filas)
 
 def generar_tramo_individual_servicio(idx, fila, cfg, fecha_txt, dia_txt, margen_minutos, historial_semis, numero_servicio):
-    h_limpia = limpiar_hora(fila["Hora"])
+    h_limpia = hora_operativa_servicio(fila, cfg)
     name_ch_format = nombre_chofer_formateado(cfg.get("chofer", "SIN ASIGNAR"), cfg.get("acompanante", ""))
     semi = fila["Semi"]
     comp = cfg.get("completa", fila["Descarga completa"])
@@ -1155,7 +1326,7 @@ def generar_operativas_individuales(texto_completo, config_servicios, fecha_obje
         plan_por_chofer.setdefault(ch_principal, []).append((idx, fila, cfg))
 
     for ch_name, servicios_chofer in plan_por_chofer.items():
-        servicios_chofer = sorted(servicios_chofer, key=lambda item: hora_a_minutos(limpiar_hora(item[1]["Hora"])))
+        servicios_chofer = sorted(servicios_chofer, key=lambda item: hora_a_minutos(hora_operativa_servicio(item[1], item[2])))
         salida = [f"👤 *OPERATIVA INDIVIDUAL - {ch_name}*"]
         historial_semis = {}
 
@@ -1163,8 +1334,8 @@ def generar_operativas_individuales(texto_completo, config_servicios, fecha_obje
         servicios_por_turno = {}
         orden_turnos = []
         for idx, fila, cfg in servicios_chofer:
-            h_limpia = limpiar_hora(fila["Hora"])
-            turno = turno_por_hora(h_limpia)
+            h_limpia = hora_operativa_servicio(fila, cfg)
+            turno = turno_operativo_servicio(fila, cfg)
             if turno not in servicios_por_turno:
                 servicios_por_turno[turno] = []
                 orden_turnos.append(turno)
@@ -1177,7 +1348,7 @@ def generar_operativas_individuales(texto_completo, config_servicios, fecha_obje
 
             # Primero: todos los servicios reales del turno.
             for idx, fila, cfg in servicios_por_turno[turno]:
-                h_limpia = limpiar_hora(fila["Hora"])
+                h_limpia = hora_operativa_servicio(fila, cfg)
                 semi = fila["Semi"]
                 comp = cfg.get("completa", fila["Descarga completa"])
                 name_ch_format = nombre_chofer_formateado(cfg.get("chofer", "SIN ASIGNAR"), cfg.get("acompanante", ""))
@@ -1427,6 +1598,52 @@ with tabs_rendered[0]:
                     env = c3.selectbox("Envases", ["SI", "NO"], index=0 if fila["Retira envases"] == "SI" else 1, key=f"en_{key}")
                     origen = c4.text_input("Origen", value=origen_por_defecto(fila["Hora"]), key=f"or_{key}")
 
+                    # Hora operativa: por defecto SIEMPRE se respeta lo indicado en Excel/PDF.
+                    hora_operativa = h_limpia
+                    ajuste_sabado_desde_noche = False
+
+                    if fecha_obj.weekday() == 5 and hora_a_minutos(h_limpia) >= hora_a_minutos("19:30"):
+                        if hora_a_minutos(h_limpia) >= hora_a_minutos("21:30"):
+                            sugerida = sugerir_hora_sabado(h_limpia)
+                            st.warning(
+                                f"⚠️ HORARIO ESPECIAL SÁBADO · Archivo: {h_limpia}h · "
+                                f"Propuesta Mercadona: {sugerida}h"
+                            )
+                            opcion_hora = st.radio(
+                                "Confirma la hora de entrada a tienda",
+                                [
+                                    f"Mantener {h_limpia}h (hora del archivo)",
+                                    f"Aplicar {sugerida}h (nuevo horario sábado)",
+                                    "Otra hora",
+                                ],
+                                key=f"hora_sabado_{key}"
+                            )
+                            if opcion_hora.startswith("Aplicar"):
+                                hora_operativa = sugerida
+                                ajuste_sabado_desde_noche = True
+                            elif opcion_hora == "Otra hora":
+                                hora_manual = st.time_input(
+                                    "Hora correcta de entrada a tienda",
+                                    value=datetime.strptime(h_limpia, "%H:%M").time(),
+                                    step=300,
+                                    key=f"hora_sabado_manual_{key}"
+                                )
+                                hora_operativa = hora_manual.strftime("%H:%M")
+                                ajuste_sabado_desde_noche = True
+                        else:
+                            st.caption(
+                                f"🕒 Sábado: el archivo ya indica {h_limpia}h. "
+                                "Se conserva esa hora. Si Mercadona la corrige, puedes modificarla."
+                            )
+                            if st.checkbox("Modificar esta hora", value=False, key=f"hora_sabado_editar_{key}"):
+                                hora_manual = st.time_input(
+                                    "Hora correcta de entrada a tienda",
+                                    value=datetime.strptime(h_limpia, "%H:%M").time(),
+                                    step=300,
+                                    key=f"hora_sabado_manual_nueva_{key}"
+                                )
+                                hora_operativa = hora_manual.strftime("%H:%M")
+
                     g_0530 = "Normal"
                     if h_limpia == "05:30" and comp == "SI" and env == "SI":
                         g_0530 = st.selectbox("Gestión envases 05:30", ["Normal", "Envases pendientes tras servicio 07:00"], key=f"g5_{key}")
@@ -1436,7 +1653,15 @@ with tabs_rendered[0]:
                     obs = st.text_area("Observación adicional", value="", height=70, key=f"ob_{key}")
                     incid = st.text_input("Incidencia (override)", value="", key=f"in_{key}")
 
-                    config_servicios[key] = {"incluir": incl, "chofer": chofer, "acompanante": acomp, "completa": comp, "envases": env, "origen": origen, "hora": h_limpia, "observacion": obs, "incidencia": incid, "termica": term_manual, "gestion_envases_0530": g_0530}
+                    config_servicios[key] = {
+                        "incluir": incl, "chofer": chofer, "acompanante": acomp,
+                        "completa": comp, "envases": env, "origen": origen,
+                        "hora": h_limpia, "hora_archivo": h_limpia,
+                        "hora_operativa": hora_operativa,
+                        "ajuste_sabado_desde_noche": ajuste_sabado_desde_noche,
+                        "observacion": obs, "incidencia": incid, "termica": term_manual,
+                        "gestion_envases_0530": g_0530
+                    }
 
                 st.subheader("6. Resumen de Operativa")
                 res = resumen_operativo(st.session_state.df_servicios, config_servicios)
@@ -1461,6 +1686,61 @@ with tabs_rendered[0]:
                     except Exception as e:
                         st.warning(str(e))
 
+                st.markdown("### 📲 Control de entregas WhatsApp")
+                st.caption(
+                    "Puedes completar el parte con semis previstos que todavía no figuran "
+                    "en los archivos de Mercadona. Estas previsiones solo afectan al texto "
+                    "del control y no modifican la operativa ni el histórico."
+                )
+
+                hay_previstos = st.radio(
+                    "¿Hay semis adicionales previstos?",
+                    ["NO", "SI"],
+                    horizontal=True,
+                    key="control_hay_previstos"
+                )
+
+                previsiones_control = []
+                if hay_previstos == "SI":
+                    cantidad_previstos = st.number_input(
+                        "¿Cuántos semis adicionales quieres añadir?",
+                        min_value=1,
+                        max_value=10,
+                        value=1,
+                        step=1,
+                        key="control_cantidad_previstos"
+                    )
+
+                    for n_prev in range(1, int(cantidad_previstos) + 1):
+                        st.markdown(f"**Semi adicional nº {n_prev}**")
+                        pc1, pc2 = st.columns([3, 2])
+
+                        tipo_prev = pc1.selectbox(
+                            f"Tipo de carga del semi nº {n_prev}",
+                            CONTROL_TIPOS_CARGA,
+                            key=f"control_tipo_{n_prev}"
+                        )
+
+                        if tipo_prev == "OTRO":
+                            carga_prev = pc1.text_input(
+                                f"Descripción de carga del semi nº {n_prev}",
+                                key=f"control_otro_{n_prev}"
+                            ).strip()
+                        else:
+                            carga_prev = tipo_prev
+
+                        hora_prev = pc2.time_input(
+                            f"Hora de entrega nº {n_prev}",
+                            value=datetime.strptime("21:30", "%H:%M").time(),
+                            step=300,
+                            key=f"control_hora_{n_prev}"
+                        )
+
+                        previsiones_control.append({
+                            "carga": carga_prev,
+                            "hora": hora_prev.strftime("%H:%M"),
+                        })
+
                 st.markdown("### Alertas operativas")
                 alertas_op = detectar_alertas_operativas(st.session_state.df_servicios, config_servicios)
                 if alertas_op:
@@ -1480,6 +1760,26 @@ with tabs_rendered[0]:
                         st.subheader("Operativa completa")
                         boton_copiar_texto(texto_w, clave="completa", etiqueta="📋 Copiar completa")
                         st.text_area("Texto listo para WhatsApp", texto_w, height=450)
+
+                        control_entregas = generar_control_entregas_whatsapp(
+                            fecha_obj,
+                            st.session_state.df_servicios,
+                            config_servicios,
+                            previsiones_adicionales=previsiones_control
+                        )
+                        if control_entregas:
+                            st.subheader("📲 Control de entregas WhatsApp")
+                            boton_copiar_texto(
+                                control_entregas,
+                                clave="control_entregas",
+                                etiqueta="📋 Copiar control de entregas"
+                            )
+                            st.text_area(
+                                "Control listo para copiar",
+                                control_entregas,
+                                height=320,
+                                key="txt_control_entregas"
+                            )
 
                         st.subheader("Operativas individuales por chófer")
                         inds = generar_operativas_individuales(texto_w, config_servicios, fecha_obj, margen_minutos)
