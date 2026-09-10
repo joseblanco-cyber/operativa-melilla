@@ -86,7 +86,17 @@ def texto_de_palabras(palabras):
     return " ".join(p["text"] for p in ordenadas)
 
 def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
-    horas_servicio_validas = ["05:30", "06:15", "07:00", "15:00", "20:30", "21:30", "22:00", "22:30"]
+    """
+    Lee las columnas visuales de DESCARGA del bloque.
+
+    La plantilla sitúa la hora de carga a la izquierda y las horas de descarga
+    a partir de x ~= 345. Esto permite aceptar horas no incluidas en una lista
+    fija (07:15, 14:30, 16:00, nuevos horarios de sábado, etc.) sin confundir
+    normalmente la hora de carga.
+
+    Si una segunda descarga carece de fecha, hereda la única fecha explícita
+    de descarga del mismo bloque. Nunca toma una fecha de otra matrícula.
+    """
     page = semi_word["page"]
     semi_y = semi_word["y0"]
 
@@ -96,9 +106,21 @@ def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
             continue
         if not (semi_y - 28 <= p["y0"] <= semi_y - 2):
             continue
-        h = limpiar_hora(p["text"])
-        if h in horas_servicio_validas and 318 <= p["x0"] <= 390:
-            posibles_horas.append({"hora": h, "x": p["x0"]})
+        if not (345 <= p["x0"] <= 430):
+            continue
+
+        texto = limpiar_hora(p["text"])
+        if not re.fullmatch(r"\d{1,2}:\d{2}", texto):
+            continue
+        try:
+            hh, mm = [int(x) for x in texto.split(":")]
+        except Exception:
+            continue
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            continue
+
+        h = f"{hh:02d}:{mm:02d}"
+        posibles_horas.append({"hora": h, "x": p["x0"]})
 
     horas = []
     for item in sorted(posibles_horas, key=lambda x: x["x"]):
@@ -108,25 +130,57 @@ def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
     if not horas:
         return []
 
+    # Solo fechas que están bajo las columnas de descarga. Se excluye la fecha
+    # de carga situada más a la izquierda.
     fechas_words = []
     for p in palabras:
         if p["page"] != page:
             continue
         if not (semi_y - 3 <= p["y0"] <= semi_y + 9):
             continue
+        if p["x0"] < 345:
+            continue
         if re.fullmatch(r"\d{2}/\d{2}/\d{4}", p["text"]):
             fecha = parse_fecha_pdf(p["text"])
             if fecha:
                 fechas_words.append({"fecha": fecha, "x": p["x0"]})
 
+    fechas_unicas = []
+    for f in fechas_words:
+        if f["fecha"] not in fechas_unicas:
+            fechas_unicas.append(f["fecha"])
+
     salida = []
     for h in horas:
-        fecha_servicio = fecha_fallback or date.today()
+        fecha_servicio = None
+        fecha_inferida = False
+
+        # Fecha explícita de la misma columna si está suficientemente alineada.
         if fechas_words:
             cercana = min(fechas_words, key=lambda f: abs(f["x"] - h["x"]))
-            fecha_servicio = cercana["fecha"]
-        salida.append({"hora": h["hora"], "fecha": fecha_servicio, "col": None})
+            distancia = abs(cercana["x"] - h["x"])
+            if distancia <= 14:
+                fecha_servicio = cercana["fecha"]
+
+        # Si falta la fecha de una columna y solo existe una fecha explícita de
+        # descarga en el bloque, la heredamos: caso típico de doble arrastre.
+        if fecha_servicio is None and len(fechas_unicas) == 1:
+            fecha_servicio = fechas_unicas[0]
+            fecha_inferida = True
+
+        if fecha_servicio is None and fecha_fallback is not None:
+            fecha_servicio = fecha_fallback
+            fecha_inferida = True
+
+        salida.append({
+            "hora": h["hora"],
+            "fecha": fecha_servicio,
+            "col": None,
+            "fecha_inferida": fecha_inferida,
+        })
+
     return salida
+
 
 def limpiar_horas_administrativas_pdf(texto_bloque, horas):
     texto = str(texto_bloque)
@@ -163,56 +217,39 @@ def horas_fechas_pdf_por_bloque(texto_bloque, fecha_fallback=None):
         if fecha and fecha not in fechas:
             fechas.append(fecha)
 
-    fecha_servicio = fechas[-1] if fechas else (fecha_fallback or date.today())
+    fecha_servicio = fechas[-1] if fechas else fecha_fallback
     return [{"hora": h, "fecha": fecha_servicio, "col": None} for h in horas]
 
 def tipo_bloque_pdf(texto_bloque):
-    t_original = str(texto_bloque).strip().upper()
-    t = t_original.replace(" ", "")
-
-    # Caso real PDF:
-    # R2140BDK -> REFRIGERADO / AGUA / AGUA / REPESCA.
-    # Debe ganar antes que MIXTO_REPESCA genérico para no heredar leyendas generales.
-    if "REFRIGERADO" in t and "AGUA" in t and "REPESCA" in t:
-        return "MIXTO_REFRIGERADO_AGUA_REPESCA"
-
+    t = str(texto_bloque).strip().upper().replace(" ", "")
     if "REPESCA" in t or "CONGELADO" in t or "REFRIGERADO" in t:
         return "MIXTO_REPESCA"
-
-    if "PLANIFICARTODOELSP" in t or re.search(r"\bSP\b", t_original):
+    if "REFRIGERADO" in t or "AGUA" in t or "AGUA" in t or "REPESCA" in t:
+        return "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"    
+    if "PLANIFICARTODOELSP" in t or re.search(r"\bSP\b", texto_bloque.upper()):
         return "TODO_SECO"
-
-    if (
-        "PICKING" in t or "PIKING" in t or "DROGUERIA" in t or "DROG" in t
-        or "COSMETICA" in t or "COSME" in t or "ALCOHOL" in t
-    ):
+    if "PICKING" in t or "DROGUERIA" in t or "COSMETICA" in t or "ALCOHOL" in t:
         return "TODO_SECO"
-
     if "CARNE" in t or "FRUTA" in t or "PESCADO" in t:
         return "TODO_REFRIGERADO"
-
     return ""
 
 def termica_pdf_por_bloque(texto_bloque, categoria_segmento_fn):
     tipo = tipo_bloque_pdf(texto_bloque)
     t = str(texto_bloque).strip().upper().replace(" ", "")
 
-    if tipo == "MIXTO_REFRIGERADO_AGUA_REPESCA":
-        return ["REFRIGERADO", "AGUA", "AGUA", "REPESCA"], {"REFRIGERADO", "AGUA", "REPESCA", "PDF_POSICIONAL"}
-
     if tipo == "TODO_REFRIGERADO":
         return ["REFRIGERADO_3"], {"REFRIGERADO_3", "PDF_POSICIONAL"}
-
     if tipo == "TODO_SECO":
         return ["SECO"], {"SECO", "PDF_POSICIONAL"}
 
-    if tipo in ["MIXTO_REPESCA", "MIXTO_REFRIGERADO_AGUA_REPESCA"]:
+    if tipo == "MIXTO_REPESCA":
         cats = []
         marcas = {"PDF_POSICIONAL"}
         if "REFRIGERADO" in t or "FRIO" in t or "FRÍO" in t:
             cats.append("REFRIGERADO_3")
             marcas.add("REFRIGERADO_3")
-        if "SECO" in t or "SECOS" in t:
+        if "SECO" in t or "SECOS" in t or "REPESCA" in t:
             cats.append("SECO")
             marcas.add("SECO")
         if "CONGELADO" in t or "-25" in t:
@@ -292,6 +329,7 @@ def extraer_registros_pdf_posicional(bytes_archivo, nombre_archivo, es_excel_ope
             continue
 
         horas_fechas = horas_fechas_pdf_por_fila_visual(palabras, semi_word)
+        horas_desde_fila_visual = bool(horas_fechas)
         if not horas_fechas:
             horas_fechas = horas_fechas_pdf_por_bloque(texto_bloque)
         if not horas_fechas:
@@ -299,8 +337,6 @@ def extraer_registros_pdf_posicional(bytes_archivo, nombre_archivo, es_excel_ope
 
         categorias, marcas = termica_pdf_por_bloque(texto_bloque, categoria_segmento_fn)
         descripcion = descripcion_termica_fn(categorias, sorted(marcas)) if categorias else "REVISAR"
-        if tipo_bloque_pdf(texto_bloque) == "MIXTO_REFRIGERADO_AGUA_REPESCA":
-            descripcion = "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"
         puerto = detectar_puerto_en_texto(texto_bloque)
         naviera = obtener_naviera_fn(puerto)
 
@@ -318,7 +354,19 @@ def extraer_registros_pdf_posicional(bytes_archivo, nombre_archivo, es_excel_ope
             "Fila": "",
             "Origen archivo": "PDF_POSICIONAL",
         }
-        registros.append(ajustar_servicios_pdf_por_tipo(registro, texto_bloque))
+        # Si las horas proceden de las columnas visuales de descarga, no las
+        # sustituimos por horas inferidas desde notas/leyendas. Así se conserva
+        # lo que realmente figura en la cuadrícula (p. ej. 14:30 frente a una
+        # nota que pudiera indicar 15:00). El ajuste histórico se mantiene solo
+        # como red de seguridad cuando falla la lectura visual.
+        if horas_desde_fila_visual:
+            registro["Horas fechas"] = sorted(
+                registro["Horas fechas"],
+                key=lambda hf: (hf.get("fecha") is None, hf.get("fecha") or date.max, hf.get("hora", ""))
+            )
+            registros.append(registro)
+        else:
+            registros.append(ajustar_servicios_pdf_por_tipo(registro, texto_bloque))
     return registros, None
 
 def extraer_texto_pdf(bytes_archivo):
@@ -375,8 +423,6 @@ def extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operati
 
         categorias_ordenadas, marcas_detectadas = termica_pdf_por_bloque(bloque, categoria_segmento_fn)
         descripcion = descripcion_termica_fn(categorias_ordenadas, sorted(marcas_detectadas)) if categorias_ordenadas else "REVISAR"
-        if tipo_bloque_pdf(bloque) == "MIXTO_REFRIGERADO_AGUA_REPESCA":
-            descripcion = "MIXTO_REFRIGERADO/AGUA/RESTO PERECEDERAS"
 
         registros.append({
             "Archivo": nombre_archivo,
@@ -398,13 +444,12 @@ def extraer_registros_pdf_lineal(bytes_archivo, nombre_archivo, es_excel_operati
 def extraer_registros_pdf(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera_fn, categoria_segmento_fn, descripcion_termica_fn):
     """
     Lector híbrido PDF:
-    - Usa el parser posicional como fuente principal.
-    - Usa el parser lineal como respaldo para servicios especiales que el posicional puede saltarse
-      por disposición visual distinta, por ejemplo "DESCARGAMOS 6:15".
-    - Fusiona sin duplicar matrículas.
+    1) Usa el parser posicional como fuente principal, porque respeta mejor bloques/filas.
+    2) Usa el parser lineal como red de seguridad para semis especiales que el posicional puede saltarse
+       por disposición visual distinta, por ejemplo servicios tipo "DESCARGAMOS 6:15".
+    3) Fusiona sin duplicar por matrícula.
     """
     aviso = None
-    aviso_lineal = None
     registros_posicional = []
     registros_lineal = []
 

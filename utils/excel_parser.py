@@ -197,10 +197,31 @@ def extraer_registros_excel(bytes_archivo, nombre_archivo, es_excel_operativo, o
             fecha = excel_serial_to_date(ws.cell(row=r, column=col).value)
 
             for hora in extraer_horas(hora_texto):
-                horas_fechas.append({"hora": hora, "fecha": fecha, "col": col})
+                horas_fechas.append({
+                    "hora": hora,
+                    "fecha": fecha,
+                    "col": col,
+                    "fecha_inferida": False,
+                })
 
         if not horas_fechas:
             continue
+
+        # Mercadona está dejando en algunos dobles arrastres la segunda hora
+        # sin repetir fecha/día. Si dentro DEL MISMO BLOQUE hay una única fecha
+        # explícita de descarga, las horas sin fecha heredan esa misma fecha.
+        # Nunca se hereda entre matrículas ni se pisa una fecha explícita.
+        fechas_explicitas = []
+        for hf in horas_fechas:
+            if hf.get("fecha") is not None and hf["fecha"] not in fechas_explicitas:
+                fechas_explicitas.append(hf["fecha"])
+
+        if len(fechas_explicitas) == 1:
+            fecha_bloque = fechas_explicitas[0]
+            for hf in horas_fechas:
+                if hf.get("fecha") is None:
+                    hf["fecha"] = fecha_bloque
+                    hf["fecha_inferida"] = True
 
         termica_ini, termica_fin = rango_lectura_termica(b)
         categorias_ordenadas, marcas_detectadas = detectar_mercancias(ws, termica_ini, termica_fin, categoria_segmento_fn)
