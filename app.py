@@ -20,7 +20,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.10"
+APP_VERSION = "1.8.11"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -351,13 +351,69 @@ def corregir_termicas_pdf_por_mercancia_real(bytes_archivo, registros):
             corregidos.append(reg)
     return corregidos
 
+def normalizar_fechas_faltantes_mismo_bloque(registros):
+    """
+    Red de seguridad en app.py para dobles arrastres con fecha omitida.
+    Si dentro del MISMO registro/matricula existe una unica fecha explicita
+    y otra hora viene sin fecha, hereda esa fecha.
+    No cruza matriculas, no pisa fechas explicitas y no actua si hay mas de
+    una fecha distinta en el mismo bloque.
+    """
+    if not registros:
+        return registros
+
+    salida = []
+    for reg in registros:
+        if not isinstance(reg, dict):
+            salida.append(reg)
+            continue
+
+        reg2 = reg.copy()
+        horas_fechas = []
+        for hf in reg.get("Horas fechas", []) or []:
+            horas_fechas.append(hf.copy() if isinstance(hf, dict) else hf)
+
+        fechas_explicitas = []
+        for hf in horas_fechas:
+            if not isinstance(hf, dict):
+                continue
+            fecha = hf.get("fecha")
+            # Solo consideramos explicita una fecha que no haya sido marcada
+            # ya como inferida por el parser.
+            if fecha is not None and not hf.get("fecha_inferida", False):
+                if fecha not in fechas_explicitas:
+                    fechas_explicitas.append(fecha)
+
+        if len(fechas_explicitas) == 1:
+            fecha_bloque = fechas_explicitas[0]
+            for hf in horas_fechas:
+                if isinstance(hf, dict) and hf.get("fecha") is None:
+                    hf["fecha"] = fecha_bloque
+                    hf["fecha_inferida"] = True
+                    hf["fecha_inferida_app"] = True
+
+        reg2["Horas fechas"] = horas_fechas
+        salida.append(reg2)
+
+    return salida
+
 def extraer_registros_archivo(bytes_archivo, nombre_archivo, es_excel_operativo):
     extension = Path(str(nombre_archivo)).suffix.lower()
     if extension in [".xlsx", ".xlsm", ".xls"]:
-        return excel_mod.extraer_registros_excel(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera, categoria_segmento, descripcion_termica)
-    if extension == ".pdf":
-        registros, err = pdf_mod.extraer_registros_pdf(bytes_archivo, nombre_archivo, es_excel_operativo, obtener_naviera, categoria_segmento, descripcion_termica)
+        registros, err = excel_mod.extraer_registros_excel(
+            bytes_archivo, nombre_archivo, es_excel_operativo,
+            obtener_naviera, categoria_segmento, descripcion_termica
+        )
         if not err:
+            registros = normalizar_fechas_faltantes_mismo_bloque(registros)
+        return registros, err
+    if extension == ".pdf":
+        registros, err = pdf_mod.extraer_registros_pdf(
+            bytes_archivo, nombre_archivo, es_excel_operativo,
+            obtener_naviera, categoria_segmento, descripcion_termica
+        )
+        if not err:
+            registros = normalizar_fechas_faltantes_mismo_bloque(registros)
             registros = corregir_termicas_pdf_por_mercancia_real(bytes_archivo, registros)
         return registros, err
     return [], f"Formato no soportado: {nombre_archivo}"
@@ -1544,7 +1600,7 @@ with tabs_rendered[0]:
             archivo_op = col_b.file_uploader("Subir archivo operativo", type=["xlsm", "xlsx", "pdf"])
             listo = archivo_ant is not None and archivo_op is not None
 
-        current_file_key = f"{archivo_unico.name if archivo_unico else ''}_{archivo_ant.name if archivo_ant else ''}_{archivo_op.name if archivo_op else ''}_{param_hash}"
+        current_file_key = f"{APP_VERSION}_{archivo_unico.name if archivo_unico else ''}_{archivo_ant.name if archivo_ant else ''}_{archivo_op.name if archivo_op else ''}_{param_hash}"
 
         if listo and (st.session_state.df_servicios is None or st.session_state.archivos_procesados != current_file_key):
             with st.spinner("Procesando y decodificando archivos por primera vez..."):
