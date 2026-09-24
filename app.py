@@ -20,7 +20,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.11"
+APP_VERSION = "1.8.12"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -585,9 +585,17 @@ def boton_copiar_texto(texto, clave="operativa", etiqueta="📋 Copiar"):
 
 def convertir_emojis_para_whatsapp_url(texto):
     texto = str(texto).replace("\r\n", "\n").replace("\r", "\n")
+
+    # Los encabezados de turno ya incluyen su texto. Se sustituyen como bloque
+    # completo para evitar duplicaciones del tipo "TURNO MAÑANA TURNO MAÑANA".
+    # Este cambio afecta solo al texto enviado mediante WhatsApp directo.
+    texto = texto.replace("🔵 *TURNO MAÑANA*", "🌅 *TURNO MAÑANA*")
+    texto = texto.replace("🟡 *TURNO TARDE*", "☕ *TURNO TARDE*")
+    texto = texto.replace("🟣 *TURNO NOCHE*", "🌙 *TURNO NOCHE*")
+
     reemplazos = {
         "📸": "FOTO", "⛔️": "*ATENCIÓN*", "⛔": "*ATENCIÓN*", "⚠️": "*AVISO*", "⚠": "*AVISO*", "📢": "*ALERTA*",
-        "🚛": "*CAMIÓN*", "👤": "*CHOFER*", "🔵": "*TURNO MAÑANA*", "🟠": "*TURNO TARDE/NOCHE*", "🟢": "*WHATSAPP*",
+        "🚛": "*CAMIÓN*", "👤": "*CHOFER*", "🟠": "*TURNO TARDE/NOCHE*", "🟢": "*WHATSAPP*",
         "🚚": "*OPERATIVA*", "👍": "OK", "➡️": "->", "➡": "->", "→": "->", "1️⃣": "1º", "2️⃣": "2º", "3️⃣": "3º"
     }
     for simbolo, palabra in reemplazos.items(): texto = texto.replace(simbolo, palabra)
