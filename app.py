@@ -20,7 +20,7 @@ import utils.excel_parser as excel_mod
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "1.8.15"
+APP_VERSION = "1.8.16"
 
 st.set_page_config(page_title="Op. Mercadona Melilla", page_icon="🚛", layout="wide")
 
@@ -1896,6 +1896,63 @@ if st.session_state.usuario_rol == "master":
                         auth_mod.crear_usuario_sheet_raw(n_user, n_name, n_rol, p_temp, creado_por=st.session_state.usuario_login)
                         st.success("Usuario creado.")
                     except Exception as e: st.error(str(e))
+
+        with st.expander("🔑 Restablecer contraseña de usuario", expanded=False):
+            st.caption(
+                "Asigna una contraseña temporal. En el siguiente acceso el usuario deberá crear su propia contraseña."
+            )
+            try:
+                usuarios_app = db_mod.registros_usuarios_app()
+                usuarios_reset = [
+                    r for r in usuarios_app
+                    if str(r.get("usuario", "")).strip()
+                    and str(r.get("usuario", "")).strip() != st.session_state.get("usuario_login", "")
+                ]
+
+                if not usuarios_reset:
+                    st.info("No hay usuarios operativos disponibles para restablecer.")
+                else:
+                    opciones_reset = {
+                        f"{str(r.get('usuario', '')).strip()} · {str(r.get('nombre', '')).strip()} · {str(r.get('activo', '')).strip().upper()}": str(r.get("usuario", "")).strip()
+                        for r in usuarios_reset
+                    }
+                    etiqueta_reset = st.selectbox(
+                        "Usuario",
+                        list(opciones_reset.keys()),
+                        key="reset_usuario_select"
+                    )
+                    usuario_reset = opciones_reset[etiqueta_reset]
+                    p_reset_1 = st.text_input(
+                        "Contraseña temporal",
+                        type="password",
+                        key="reset_password_1"
+                    )
+                    p_reset_2 = st.text_input(
+                        "Repetir contraseña temporal",
+                        type="password",
+                        key="reset_password_2"
+                    )
+
+                    if st.button("🔑 Restablecer contraseña", key="btn_reset_password"):
+                        ok_reset, msg_reset = auth_mod.validar_password_nueva(p_reset_1, p_reset_2)
+                        if not ok_reset:
+                            st.error(msg_reset)
+                        else:
+                            db_mod.actualizar_password_usuario_sheet(
+                                usuario_reset,
+                                p_reset_1,
+                                forzar_cambio=True
+                            )
+                            db_mod.registrar_evento_app(
+                                "reset_password",
+                                f"Contraseña temporal restablecida para {usuario_reset}"
+                            )
+                            st.success(
+                                f"Contraseña temporal establecida para {usuario_reset}. "
+                                "En su próximo acceso deberá crear una contraseña personal."
+                            )
+            except Exception as e:
+                st.error(f"No se pudo cargar o actualizar la gestión de usuarios: {e}")
 
         st.markdown("### Tabla Maestra de Chóferes")
         ed_ch = st.data_editor(df_choferes_cfg, num_rows="dynamic", use_container_width=True, key="ed_choferes")
