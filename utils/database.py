@@ -10,7 +10,7 @@ GOOGLE_SHEET_NAME = "Historico Operativas Mercadona Melilla"
 GOOGLE_SHEET_TAB = "historico"
 GOOGLE_SHEET_ACCESOS_TAB = "accesos_app"
 GOOGLE_SHEET_USUARIOS_TAB = "usuarios_app"
-APP_VERSION = "1.8.16"
+APP_VERSION = "1.8.17"
 
 def conectar_google_sheets():
     scope = [
