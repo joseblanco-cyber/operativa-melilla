@@ -10,7 +10,7 @@ GOOGLE_SHEET_NAME = "Historico Operativas Mercadona Melilla"
 GOOGLE_SHEET_TAB = "historico"
 GOOGLE_SHEET_ACCESOS_TAB = "accesos_app"
 GOOGLE_SHEET_USUARIOS_TAB = "usuarios_app"
-APP_VERSION = "1.7.8"
+APP_VERSION = "1.8.14"
 
 def conectar_google_sheets():
     scope = [
@@ -182,7 +182,14 @@ def registrar_evento_app(accion, detalle=""):
     except Exception:
         pass
 
-def obtener_usuario_sheet(usuario):
+def obtener_usuario_sheet(usuario, propagar_error=False):
+    """
+    Busca un usuario en la hoja usuarios_app.
+
+    Por compatibilidad, el comportamiento normal sigue devolviendo (None, None)
+    si Google Sheets falla. Durante el login puede usarse propagar_error=True
+    para distinguir un problema de conexión de unas credenciales incorrectas.
+    """
     usuario = str(usuario).strip()
     if not usuario:
         return None, None
@@ -191,7 +198,12 @@ def obtener_usuario_sheet(usuario):
         for idx, r in enumerate(registros, start=2):
             if str(r.get("usuario", "")).strip() == usuario:
                 return idx, r
-    except Exception:
+    except Exception as e:
+        if propagar_error:
+            raise RuntimeError(
+                f"No se pudo leer la hoja '{GOOGLE_SHEET_USUARIOS_TAB}': "
+                f"{type(e).__name__}: {e}"
+            ) from e
         return None, None
     return None, None
 
