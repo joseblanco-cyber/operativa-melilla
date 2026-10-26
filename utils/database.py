@@ -10,7 +10,7 @@ GOOGLE_SHEET_NAME = "Historico Operativas Mercadona Melilla"
 GOOGLE_SHEET_TAB = "historico"
 GOOGLE_SHEET_ACCESOS_TAB = "accesos_app"
 GOOGLE_SHEET_USUARIOS_TAB = "usuarios_app"
-APP_VERSION = "1.8.15"
+APP_VERSION = "1.8.16"
 
 def conectar_google_sheets():
     scope = [
@@ -207,7 +207,7 @@ def obtener_usuario_sheet(usuario, propagar_error=False):
         return None, None
     return None, None
 
-def actualizar_password_usuario_sheet(usuario, nueva_password):
+def actualizar_password_usuario_sheet(usuario, nueva_password, forzar_cambio=False):
     row_idx, datos = obtener_usuario_sheet(usuario)
     if not row_idx or not datos:
         raise ValueError("Usuario no encontrado.")
@@ -222,7 +222,7 @@ def actualizar_password_usuario_sheet(usuario, nueva_password):
 
     worksheet.update_cell(row_idx, mapa["salt"], salt)
     worksheet.update_cell(row_idx, mapa["password_hash"], password_hash)
-    worksheet.update_cell(row_idx, mapa["forzar_cambio"], "NO")
+    worksheet.update_cell(row_idx, mapa["forzar_cambio"], "SI" if forzar_cambio else "NO")
     worksheet.update_cell(row_idx, mapa["ultimo_cambio"], ahora)
 
 def actualizar_estado_usuario_sheet(usuario, activo="NO"):
