@@ -37,25 +37,8 @@ def obtener_usuarios_secrets():
 def verificar_login_usuario(usuario, password):
     usuario_key = str(usuario).strip()
 
-    # 1. Validar usuarios operativos guardados en la base de datos (Google Sheets)
-    _, datos_sheet = obtener_usuario_sheet(usuario_key)
-    if datos_sheet:
-        if str(datos_sheet.get("activo", "")).strip().upper() != "SI":
-            return None, "Usuario desactivado."
-
-        ok = verificar_hash_password(password, datos_sheet.get("salt", ""), datos_sheet.get("password_hash", ""))
-        if not ok:
-            return None, "Usuario o contraseña incorrectos."
-
-        return {
-            "usuario": usuario_key,
-            "nombre": datos_sheet.get("nombre", usuario_key),
-            "rol": datos_sheet.get("rol", "usuario"),
-            "forzar_cambio": str(datos_sheet.get("forzar_cambio", "")).strip().upper() == "SI",
-            "origen": "sheet",
-        }, ""
-
-    # 2. Validar usuario master inicial configurado en Secrets
+    # 1. El usuario master de Secrets debe poder acceder aunque Google Sheets
+    #    tenga una incidencia. Esto mantiene una via de administracion segura.
     usuarios = obtener_usuarios_secrets()
     if usuario_key in usuarios:
         datos = usuarios[usuario_key]
@@ -72,6 +55,45 @@ def verificar_login_usuario(usuario, password):
             "rol": datos.get("rol", "usuario"),
             "forzar_cambio": False,
             "origen": "secrets",
+        }, ""
+
+    # 2. Usuarios operativos: leer usuarios_app y NO ocultar una incidencia
+    #    de Google como si fuera una contraseña incorrecta.
+    try:
+        _, datos_sheet = obtener_usuario_sheet(usuario_key, propagar_error=True)
+    except Exception as e:
+        detalle = str(e).replace("\n", " ").replace("\r", " ").strip()
+        # Evitar mensajes interminables o cualquier posible contenido sensible.
+        detalle = re.sub(
+            r"(?i)(private[_ -]?key\s*[:=]\s*)([^,;]+)",
+            r"\1[OCULTO]",
+            detalle
+        )
+        if len(detalle) > 450:
+            detalle = detalle[:450] + "…"
+        return None, (
+            "No se pudo consultar la base de usuarios de Google Sheets. "
+            f"Detalle técnico: {detalle}"
+        )
+
+    if datos_sheet:
+        if str(datos_sheet.get("activo", "")).strip().upper() != "SI":
+            return None, "Usuario desactivado."
+
+        ok = verificar_hash_password(
+            password,
+            datos_sheet.get("salt", ""),
+            datos_sheet.get("password_hash", "")
+        )
+        if not ok:
+            return None, "Usuario o contraseña incorrectos."
+
+        return {
+            "usuario": usuario_key,
+            "nombre": datos_sheet.get("nombre", usuario_key),
+            "rol": datos_sheet.get("rol", "usuario"),
+            "forzar_cambio": str(datos_sheet.get("forzar_cambio", "")).strip().upper() == "SI",
+            "origen": "sheet",
         }, ""
 
     return None, "Usuario o contraseña incorrectos."
