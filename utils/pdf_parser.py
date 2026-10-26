@@ -373,10 +373,35 @@ def extraer_registros_pdf_posicional(bytes_archivo, nombre_archivo, es_excel_ope
     registros = []
     for i, semi_word in enumerate(bloques):
         page = semi_word["page"]
-        y_ini = semi_word["y0"] - 18
-        y_fin = bloques[i + 1]["y0"] - 18 if i + 1 < len(bloques) and bloques[i + 1]["page"] == page else semi_word["y0"] + 118
+        semi_y = float(semi_word["y0"])
+        page_width = float(semi_word.get("page_width") or 842.0)
+        page_height = float(semi_word.get("page_height") or 595.2)
 
-        bloque_words = [p for p in palabras if p["page"] == page and y_ini <= p["y0"] <= y_fin and p["x0"] <= 520]
+        # Delimitar cada bloque por los puntos medios entre matriculas.
+        # Esto evita depender de margenes Y fijos que dejan de funcionar
+        # cuando Mercadona exporta el mismo PDF a otra escala.
+        if i > 0 and bloques[i - 1]["page"] == page:
+            y_ini = (float(bloques[i - 1]["y0"]) + semi_y) / 2.0
+        else:
+            y_ini = max(0.0, semi_y - page_height * 0.05)
+
+        if i + 1 < len(bloques) and bloques[i + 1]["page"] == page:
+            y_fin = (semi_y + float(bloques[i + 1]["y0"])) / 2.0
+        else:
+            y_fin = min(page_height, semi_y + page_height * 0.20)
+
+        # El limite horizontal historico era x<=520 sobre una pagina de
+        # ~842 pt (aprox. 61,8%). Escalarlo al ancho real conserva Puerto,
+        # mercancia, envases y notas utiles en PDFs grandes sin invadir las
+        # tablas administrativas de la derecha.
+        x_fin_bloque = page_width * (520.0 / 842.0)
+
+        bloque_words = [
+            p for p in palabras
+            if p["page"] == page
+            and y_ini <= p["y0"] <= y_fin
+            and p["x0"] <= x_fin_bloque
+        ]
         texto_bloque = texto_de_palabras(bloque_words)
         if not texto_bloque.strip():
             continue
