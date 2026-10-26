@@ -87,26 +87,36 @@ def texto_de_palabras(palabras):
 
 def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
     """
-    Lee las columnas visuales de DESCARGA del bloque.
+    Lee las columnas visuales de DESCARGA del bloque sin depender de una
+    coordenada X fija.
 
-    La plantilla sitúa la hora de carga a la izquierda y las horas de descarga
-    a partir de x ~= 345. Esto permite aceptar horas no incluidas en una lista
-    fija (07:15, 14:30, 16:00, nuevos horarios de sábado, etc.) sin confundir
-    normalmente la hora de carga.
+    En la plantilla Mercadona, dentro de cada bloque, la primera pareja
+    hora/fecha de izquierda a derecha corresponde a CARGA y las siguientes
+    corresponden a DESCARGA. Algunos PDFs desplazan horizontalmente estas
+    columnas, por lo que una frontera absoluta de X puede confundir la hora
+    de carga con una descarga.
 
-    Si una segunda descarga carece de fecha, hereda la única fecha explícita
-    de descarga del mismo bloque. Nunca toma una fecha de otra matrícula.
+    Reglas:
+    - Si se detectan dos o mas horas alineadas, la primera (mas a la izquierda)
+      se considera CARGA y se excluye.
+    - Las horas restantes se consideran DESCARGAS, incluidas horas no estandar
+      como 07:15, 14:30, 16:00, 19:30, etc.
+    - Si una segunda descarga carece de fecha, hereda la unica fecha explicita
+      de descarga del mismo bloque.
+    - Nunca se heredan fechas entre matriculas.
     """
     page = semi_word["page"]
     semi_y = semi_word["y0"]
 
-    posibles_horas = []
+    # 1) Horas de la fila cabecera del bloque. Usamos una franja horizontal
+    # amplia porque Mercadona desplaza las columnas entre PDFs.
+    candidatos_hora = []
     for p in palabras:
         if p["page"] != page:
             continue
         if not (semi_y - 28 <= p["y0"] <= semi_y - 2):
             continue
-        if not (345 <= p["x0"] <= 430):
+        if not (280 <= p["x0"] <= 460):
             continue
 
         texto = limpiar_hora(p["text"])
@@ -119,53 +129,81 @@ def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
             continue
 
-        h = f"{hh:02d}:{mm:02d}"
-        posibles_horas.append({"hora": h, "x": p["x0"]})
+        candidatos_hora.append({
+            "hora": f"{hh:02d}:{mm:02d}",
+            "x": p["x0"],
+        })
 
-    horas = []
-    for item in sorted(posibles_horas, key=lambda x: x["x"]):
-        if item["hora"] not in [h["hora"] for h in horas]:
-            horas.append(item)
+    # Deduplicar por posicion/hora y ordenar de izquierda a derecha.
+    candidatos_hora = sorted(candidatos_hora, key=lambda x: x["x"])
+    horas_ordenadas = []
+    for item in candidatos_hora:
+        if not any(abs(item["x"] - h["x"]) < 2 and item["hora"] == h["hora"] for h in horas_ordenadas):
+            horas_ordenadas.append(item)
 
-    if not horas:
+    if not horas_ordenadas:
         return []
 
-    # Solo fechas que están bajo las columnas de descarga. Se excluye la fecha
-    # de carga situada más a la izquierda.
-    fechas_words = []
+    # 2) Fechas situadas bajo esas columnas.
+    fechas_ordenadas = []
     for p in palabras:
         if p["page"] != page:
             continue
         if not (semi_y - 3 <= p["y0"] <= semi_y + 9):
             continue
-        if p["x0"] < 345:
+        if not (280 <= p["x0"] <= 460):
             continue
         if re.fullmatch(r"\d{2}/\d{2}/\d{4}", p["text"]):
             fecha = parse_fecha_pdf(p["text"])
             if fecha:
-                fechas_words.append({"fecha": fecha, "x": p["x0"]})
+                fechas_ordenadas.append({"fecha": fecha, "x": p["x0"]})
+    fechas_ordenadas = sorted(fechas_ordenadas, key=lambda x: x["x"])
 
-    fechas_unicas = []
-    for f in fechas_words:
-        if f["fecha"] not in fechas_unicas:
-            fechas_unicas.append(f["fecha"])
+    # 3) Separar CARGA de DESCARGA por orden relativo, no por X absoluta.
+    if len(horas_ordenadas) >= 2:
+        # La primera hora es la hora de carga.
+        horas_descarga = horas_ordenadas[1:]
+    else:
+        # Caso degradado: si solo queda una hora, intentamos decidir por las
+        # fechas. Con dos o mas fechas, la primera es carga y las demas descarga.
+        unica = horas_ordenadas[0]
+        if len(fechas_ordenadas) >= 2:
+            fecha_carga = fechas_ordenadas[0]
+            fechas_descarga_tmp = fechas_ordenadas[1:]
+            dist_carga = abs(unica["x"] - fecha_carga["x"])
+            dist_desc = min(abs(unica["x"] - f["x"]) for f in fechas_descarga_tmp)
+            horas_descarga = [unica] if dist_desc < dist_carga else []
+        else:
+            # Si el PDF no ofrece suficiente contexto, preferimos conservar la
+            # unica hora antes que perder un servicio real.
+            horas_descarga = [unica]
+
+    if not horas_descarga:
+        return []
+
+    # Primera fecha = carga cuando hay varias columnas de fecha.
+    fechas_descarga = fechas_ordenadas[1:] if len(fechas_ordenadas) >= 2 else fechas_ordenadas
+
+    fechas_unicas_descarga = []
+    for f in fechas_descarga:
+        if f["fecha"] not in fechas_unicas_descarga:
+            fechas_unicas_descarga.append(f["fecha"])
 
     salida = []
-    for h in horas:
+    for h in horas_descarga:
         fecha_servicio = None
         fecha_inferida = False
 
-        # Fecha explícita de la misma columna si está suficientemente alineada.
-        if fechas_words:
-            cercana = min(fechas_words, key=lambda f: abs(f["x"] - h["x"]))
-            distancia = abs(cercana["x"] - h["x"])
-            if distancia <= 14:
+        # Fecha explicita de la misma columna si esta razonablemente alineada.
+        if fechas_descarga:
+            cercana = min(fechas_descarga, key=lambda f: abs(f["x"] - h["x"]))
+            if abs(cercana["x"] - h["x"]) <= 14:
                 fecha_servicio = cercana["fecha"]
 
-        # Si falta la fecha de una columna y solo existe una fecha explícita de
-        # descarga en el bloque, la heredamos: caso típico de doble arrastre.
-        if fecha_servicio is None and len(fechas_unicas) == 1:
-            fecha_servicio = fechas_unicas[0]
+        # Si una descarga no trae fecha y solo hay una fecha de descarga
+        # explicita en el bloque, heredarla para conservar el doble arrastre.
+        if fecha_servicio is None and len(fechas_unicas_descarga) == 1:
+            fecha_servicio = fechas_unicas_descarga[0]
             fecha_inferida = True
 
         if fecha_servicio is None and fecha_fallback is not None:
