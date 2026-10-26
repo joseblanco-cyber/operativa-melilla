@@ -54,6 +54,8 @@ def palabras_pdf_por_posicion(bytes_archivo):
             x0, y0, x1, y1, txt = w[:5]
             palabras.append({
                 "page": page_index,
+                "page_width": float(page.rect.width),
+                "page_height": float(page.rect.height),
                 "x0": float(x0),
                 "y0": float(y0),
                 "x1": float(x1),
@@ -108,15 +110,28 @@ def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
     page = semi_word["page"]
     semi_y = semi_word["y0"]
 
-    # 1) Horas de la fila cabecera del bloque. Usamos una franja horizontal
-    # amplia porque Mercadona desplaza las columnas entre PDFs.
+    # Las plantillas PDF de Mercadona pueden venir exportadas a escalas muy
+    # distintas (por ejemplo ~842 pt o ~2406 pt de ancho). Por eso las columnas
+    # de carga/descarga se localizan por PORCENTAJE del ancho de la página y no
+    # con coordenadas X absolutas.
+    page_width = float(semi_word.get("page_width") or 0)
+    if page_width <= 0:
+        xs = [p.get("x1", 0) for p in palabras if p.get("page") == page]
+        page_width = max(xs) if xs else 842.0
+
+    # Esta banda cubre las columnas Fecha/hora de carga y descarga en las
+    # plantillas conocidas, pero excluye notas amarillas y horas de EMBARQUE.
+    x_min_servicio = page_width * 0.36
+    x_max_servicio = page_width * 0.52
+
+    # 1) Horas de la fila cabecera del bloque.
     candidatos_hora = []
     for p in palabras:
         if p["page"] != page:
             continue
         if not (semi_y - 28 <= p["y0"] <= semi_y - 2):
             continue
-        if not (280 <= p["x0"] <= 460):
+        if not (x_min_servicio <= p["x0"] <= x_max_servicio):
             continue
 
         texto = limpiar_hora(p["text"])
@@ -151,7 +166,7 @@ def horas_fechas_pdf_por_fila_visual(palabras, semi_word, fecha_fallback=None):
             continue
         if not (semi_y - 3 <= p["y0"] <= semi_y + 9):
             continue
-        if not (280 <= p["x0"] <= 460):
+        if not (x_min_servicio <= p["x0"] <= x_max_servicio):
             continue
         if re.fullmatch(r"\d{2}/\d{2}/\d{4}", p["text"]):
             fecha = parse_fecha_pdf(p["text"])
