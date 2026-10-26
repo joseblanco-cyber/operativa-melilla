@@ -2,6 +2,7 @@
 import re
 import secrets
 import hashlib
+import hmac
 from datetime import datetime
 import streamlit as st
 
@@ -23,10 +24,13 @@ def hash_password(password, salt=None):
     return salt, digest
 
 def verificar_hash_password(password, salt, password_hash):
-    if not salt or not password_hash:
+    # Limpiar posibles espacios/caracteres de presentación procedentes de Sheets.
+    salt_limpio = str(salt or "").strip()
+    hash_limpio = str(password_hash or "").strip().lower()
+    if not salt_limpio or not hash_limpio:
         return False
-    _, digest = hash_password(password, salt=salt)
-    return digest == str(password_hash)
+    _, digest = hash_password(password, salt=salt_limpio)
+    return hmac.compare_digest(digest.lower(), hash_limpio)
 
 def obtener_usuarios_secrets():
     try:
@@ -37,33 +41,37 @@ def obtener_usuarios_secrets():
 def verificar_login_usuario(usuario, password):
     usuario_key = str(usuario).strip()
 
-    # 1. El usuario master de Secrets debe poder acceder aunque Google Sheets
-    #    tenga una incidencia. Esto mantiene una via de administracion segura.
+    # 1. SOLO el usuario master definido en Secrets tiene prioridad absoluta.
+    #    Así puede acceder para administrar la app aunque Google Sheets falle.
     usuarios = obtener_usuarios_secrets()
-    if usuario_key in usuarios:
-        datos = usuarios[usuario_key]
-        password_guardada = str(datos.get("password", ""))
+    datos_secret = usuarios.get(usuario_key) if usuario_key in usuarios else None
+    es_master_secret = bool(
+        datos_secret
+        and str(datos_secret.get("rol", "")).strip().lower() == "master"
+    )
 
+    if es_master_secret:
+        password_guardada = str(datos_secret.get("password", ""))
         if str(password) != password_guardada:
-            hash_introducedcido = hashlib.sha256(str(password).encode("utf-8")).hexdigest()
-            if hash_introducedcido != password_guardada:
+            hash_introducido = hashlib.sha256(str(password).encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(hash_introducido, password_guardada):
                 return None, "Usuario o contraseña incorrectos."
 
         return {
             "usuario": usuario_key,
-            "nombre": datos.get("nombre", usuario_key),
-            "rol": datos.get("rol", "usuario"),
+            "nombre": datos_secret.get("nombre", usuario_key),
+            "rol": datos_secret.get("rol", "master"),
             "forzar_cambio": False,
             "origen": "secrets",
         }, ""
 
-    # 2. Usuarios operativos: leer usuarios_app y NO ocultar una incidencia
-    #    de Google como si fuera una contraseña incorrecta.
+    # 2. Todos los usuarios operativos se validan PRIMERO contra usuarios_app.
+    #    Esto evita que una copia antigua del mismo usuario en Secrets intercepte
+    #    la contraseña vigente almacenada en Google Sheets.
     try:
         _, datos_sheet = obtener_usuario_sheet(usuario_key, propagar_error=True)
     except Exception as e:
         detalle = str(e).replace("\n", " ").replace("\r", " ").strip()
-        # Evitar mensajes interminables o cualquier posible contenido sensible.
         detalle = re.sub(
             r"(?i)(private[_ -]?key\s*[:=]\s*)([^,;]+)",
             r"\1[OCULTO]",
@@ -94,6 +102,23 @@ def verificar_login_usuario(usuario, password):
             "rol": datos_sheet.get("rol", "usuario"),
             "forzar_cambio": str(datos_sheet.get("forzar_cambio", "")).strip().upper() == "SI",
             "origen": "sheet",
+        }, ""
+
+    # 3. Compatibilidad con algún usuario legado que exista SOLO en Secrets.
+    #    Nunca se ejecuta si ese usuario ya existe en usuarios_app.
+    if datos_secret:
+        password_guardada = str(datos_secret.get("password", ""))
+        if str(password) != password_guardada:
+            hash_introducido = hashlib.sha256(str(password).encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(hash_introducido, password_guardada):
+                return None, "Usuario o contraseña incorrectos."
+
+        return {
+            "usuario": usuario_key,
+            "nombre": datos_secret.get("nombre", usuario_key),
+            "rol": datos_secret.get("rol", "usuario"),
+            "forzar_cambio": False,
+            "origen": "secrets_legacy",
         }, ""
 
     return None, "Usuario o contraseña incorrectos."
